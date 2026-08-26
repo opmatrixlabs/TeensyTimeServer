@@ -1,0 +1,14 @@
+# Visual Studio and Visual Micro generated state
+.vs/
+__vm/
+bin/
+obj/
+*.vcxproj.user
+
+# Other IDE-local state
+.idea/
+
+# Firmware build products
+*.elf
+*.hex
+*.map

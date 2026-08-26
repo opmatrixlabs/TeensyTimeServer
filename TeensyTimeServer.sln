@@ -1,0 +1,37 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.9.12112.369
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TeensyTimeServer", "TeensyTimeServer.vcxproj", "{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{67D814A8-75B1-4CA5-81FC-166AB8FE7CF9}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|ARM = Debug|ARM
+		Debug|ARM64 = Debug|ARM64
+		Release|ARM = Release|ARM
+		Release|ARM64 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM.ActiveCfg = Debug|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM.Build.0 = Debug|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM.Deploy.0 = Debug|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM64.Build.0 = Debug|ARM64
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM.ActiveCfg = Release|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM.Build.0 = Release|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM.Deploy.0 = Release|ARM
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM64.ActiveCfg = Release|ARM64
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM64.Build.0 = Release|ARM64
+		{9C7405BA-351F-F4FD-B95B-C65B1EFCDFBE}.Release|ARM64.Deploy.0 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CE574B06-4258-496A-9EB0-A88019C6BDDE}
+	EndGlobalSection
+EndGlobal
