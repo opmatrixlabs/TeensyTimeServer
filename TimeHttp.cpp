@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025. Andrew Kevin Bailey
+ * Copyright (c) 2026. Andrew Kevin Bailey
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  *
  * The MIT License (MIT)
@@ -46,7 +46,7 @@ void TimeHttp::setAppName(const String appName) {
   appName_ = appName;
 }
 
-const String TimeHttp::getAppName() {
+String TimeHttp::getAppName() {
   return appName_;
 }
 
@@ -100,6 +100,14 @@ String* TimeHttp::getConfigString() {
 
 void TimeHttp::setConfigFunction(void (*fptrGetGpsConfig)()) {
     fptrGetGpsConfig_ = fptrGetGpsConfig;
+}
+
+void TimeHttp::setGpsTimeFunction(String (*fptrGetGpsTime)()) {
+  fptrGetGpsTime_ = fptrGetGpsTime;
+}
+
+void TimeHttp::setRtcTimeFunction(String (*fptrGetRtcTime)()) {
+  fptrGetRtcTime_ = fptrGetRtcTime;
 }
 
 void TimeHttp::setUpdateRtcFunction(void (*fptrUpdateRtc)()) {
@@ -196,6 +204,13 @@ bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gps
   gpsFixType_ = gpsFixType;
   gpsISO8601Time_ = gpsISO8601Time;
   rtcISO8601Time_ = rtcISO8601Time;
+  return processRequest();
+}
+
+bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gpsFixType) {
+  pHttpClient_ = client;
+  localIp_ = localIp;
+  gpsFixType_ = gpsFixType;
   return processRequest();
 }
 
@@ -302,6 +317,12 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                 goto END_LOOP; 
               }
             }
+            else if (headers.indexOf("GET /rtc") >= 0) {
+              if (fptrGetRtcTime_ != nullptr)
+                rtcISO8601Time_ = fptrGetRtcTime_();
+              sendRtcTime();
+              goto END_LOOP;
+            }
             else {
               if (headers.indexOf("?action=setRtc") >= 0) {
                 fptrUpdateRtc_();
@@ -310,7 +331,12 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                 pHttpClient_->println("Location: /");
                 pHttpClient_->println("Connection: close");
                 pHttpClient_->println();
+                goto END_LOOP;
               }
+              if (fptrGetGpsTime_ != nullptr)
+                gpsISO8601Time_ = fptrGetGpsTime_();
+              if (fptrGetRtcTime_ != nullptr)
+                rtcISO8601Time_ = fptrGetRtcTime_();
               sendHomePage();
               // Done. Break out of the loop.
               goto END_LOOP; 
@@ -460,6 +486,7 @@ void TimeHttp::sendHomePage(const String appName, Properties* properties, String
 void TimeHttp::sendHomePage() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
+  pHttpClient_->println("Cache-Control: no-store");
   pHttpClient_->println("Connection: close");
   pHttpClient_->println();
   pHttpClient_->print("<!DOCTYPE html><html lang=\"en\"><head><title>"); pHttpClient_->print(pProperties_->getServerName()); pHttpClient_->println("</title></head><body>");
@@ -496,9 +523,18 @@ void TimeHttp::sendHomePage() {
   pHttpClient_->println("<form action=\"/\" method=\"get\">");
   pHttpClient_->println("<button type=\"submit\" name=\"action\" value=\"setRtc\">Set RTC</button>");
   pHttpClient_->println("</form>");
-  pHttpClient_->println("<br><br><p>Note:<br>Due to the timings of the HTTP request, the GPS and RTC times will not exactly match.");
-  pHttpClient_->println("<br>If the two times are off by more than 2 seconds, click the \"Set RTC\" button.</p>");
+  pHttpClient_->println("<br><br><p>Note:<br>The RTC fractional field is hundredths of a second (10 ms resolution).");
+  pHttpClient_->println("<br>If the GPS and RTC times are off by more than a second, click the \"Set RTC\" button.</p>");
   pHttpClient_->println("</body></html>");
+}
+
+void TimeHttp::sendRtcTime() {
+  pHttpClient_->println("HTTP/1.1 200 OK");
+  pHttpClient_->println("Content-Type: text/plain");
+  pHttpClient_->println("Cache-Control: no-store");
+  pHttpClient_->println("Connection: close");
+  pHttpClient_->println();
+  pHttpClient_->print(rtcISO8601Time_);
 }
 
 void TimeHttp::sendConfigPage(String* config) {

@@ -23,17 +23,42 @@
 
 #include <stdint.h>
 
-struct NormalizedTimestamp {
-  int64_t secondsSince1900; // Full seconds retain the NTP era across the 2036 wire rollover.
-  uint32_t nanoseconds;     // Normalized range: 0 through 999,999,999.
+constexpr uint8_t MAX_NAV_PVT_EPOCH_RATE = 127;
+
+struct GnssStatusSnapshot {
+  uint32_t receivedMillis = 0;
+  uint32_t timeAccuracyNanoseconds = 0;
+  int32_t nanoseconds = 0;
+  uint16_t year = 0;
+  uint8_t month = 0;
+  uint8_t day = 0;
+  uint8_t hour = 0;
+  uint8_t minute = 0;
+  uint8_t second = 0;
+  uint8_t fixType = 0;
+  uint8_t satellitesUsed = 0;
+  bool fixOk = false;
+  bool validDate = false;
+  bool validTime = false;
+  bool fullyResolved = false;
 };
 
-struct NtpTimestamp {
-  uint32_t seconds;  // Low 32 bits of seconds since 1900 (the NTP era offset).
-  uint32_t fraction; // Binary fraction in units of 2^-32 seconds.
+class GnssStatusCache {
+public:
+  void clear();
+  void update(const GnssStatusSnapshot& snapshot);
+  bool get(GnssStatusSnapshot* snapshot) const;
+  bool isFresh(uint32_t currentMillis, uint32_t maximumAgeMillis) const;
+
+private:
+  bool hasSnapshot_ = false;
+  GnssStatusSnapshot snapshot_ = {};
 };
 
-NormalizedTimestamp normalizeTimestamp(int64_t secondsSince1900, int64_t nanoseconds);
-NtpTimestamp toNtpTimestamp(const NormalizedTimestamp& timestamp);
-void writeUint32BigEndian(uint8_t* destination, uint32_t value);
-void writeNtpTimestamp(uint8_t* destination, const NtpTimestamp& timestamp);
+uint8_t navPvtEpochRateForStatusFrequency(uint32_t statusFrequencyMillis,
+                                          uint32_t navigationEpochMillis = 1000);
+uint32_t navPvtReportPeriodMillis(uint8_t epochRate,
+                                  uint32_t navigationEpochMillis = 1000);
+uint32_t gnssStatusFreshnessLimitMillis(uint8_t epochRate,
+                                        uint32_t navigationEpochMillis = 1000);
+const char* gnssFixTypeName(bool fixOk, uint8_t fixType);

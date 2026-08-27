@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025. Andrew Kevin Bailey
+ * Copyright (c) 2026. Andrew Kevin Bailey
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  *
  * The MIT License (MIT)
@@ -24,11 +24,12 @@
 #include <string.h>
 
 namespace {
-constexpr uint8_t NTP_VERSION_3 = 3;
+constexpr uint8_t NTP_VERSION_1 = 1;
 constexpr uint8_t NTP_VERSION_4 = 4;
 constexpr uint8_t NTP_CLIENT_MODE = 3;
 constexpr uint8_t NTP_SERVER_MODE = 4;
 constexpr uint8_t NTP_STRATUM_GPS = 1;
+constexpr uint8_t NTP_LEAP_ALARM = 3;
 constexpr uint8_t NTP_PRECISION_MINUS_9 = 0xF7;
 constexpr uint8_t NTP_ROOT_DISPERSION_LOW_BYTE = 0x50;
 }
@@ -42,7 +43,7 @@ NtpResponseStatus validateNtpRequest(const uint8_t* request, const size_t reques
     return NtpResponseStatus::InvalidMode;
 
   const uint8_t version = (request[0] >> 3) & 0x07;
-  if (version != NTP_VERSION_3 && version != NTP_VERSION_4)
+  if (version < NTP_VERSION_1 || version > NTP_VERSION_4)
     return NtpResponseStatus::UnsupportedVersion;
 
   return NtpResponseStatus::Ready;
@@ -50,6 +51,7 @@ NtpResponseStatus validateNtpRequest(const uint8_t* request, const size_t reques
 
 NtpResponseStatus createNtpResponse(const uint8_t* request,
                                     const size_t requestLength,
+                                    const NormalizedTimestamp& referenceTime,
                                     const NormalizedTimestamp& receiveTime,
                                     const NormalizedTimestamp& transmitTime,
                                     const bool timeAvailable,
@@ -62,13 +64,22 @@ NtpResponseStatus createNtpResponse(const uint8_t* request,
   if (response == nullptr || responseCapacity < NTP_PACKET_SIZE)
     return NtpResponseStatus::ResponseBufferTooSmall;
 
-  if (!timeAvailable)
-    return NtpResponseStatus::TimeUnavailable;
-
   uint8_t packet[NTP_PACKET_SIZE] = {};
   const uint8_t requestVersion = (request[0] >> 3) & 0x07;
 
-  // Retain the existing server metadata. Synchronization metadata is handled by a later repair-plan step.
+  if (!timeAvailable) {
+    // A valid request still receives an explicit "clock unsynchronized" reply.
+    // Clients can distinguish loss of synchronization from an unreachable server
+    // without ever accepting a fallback or stale timestamp.
+    packet[0] = static_cast<uint8_t>((NTP_LEAP_ALARM << 6) |
+                                     (requestVersion << 3) |
+                                     NTP_SERVER_MODE);
+    packet[2] = request[2];
+    memcpy(packet + 24, request + 40, 8);
+    memcpy(response, packet, NTP_PACKET_SIZE);
+    return NtpResponseStatus::Ready;
+  }
+
   packet[0] = static_cast<uint8_t>((requestVersion << 3) | NTP_SERVER_MODE);
   packet[1] = NTP_STRATUM_GPS;
   packet[2] = request[2];
@@ -80,6 +91,7 @@ NtpResponseStatus createNtpResponse(const uint8_t* request,
 
   // The server Originate Timestamp is the client's Transmit Timestamp (T1).
   memcpy(packet + 24, request + 40, 8);
+  writeNtpTimestamp(packet + 16, toNtpTimestamp(referenceTime));
   writeNtpTimestamp(packet + 32, toNtpTimestamp(receiveTime));
   writeNtpTimestamp(packet + 40, toNtpTimestamp(transmitTime));
 

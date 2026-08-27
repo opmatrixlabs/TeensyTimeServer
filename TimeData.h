@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025. Andrew Kevin Bailey
+ * Copyright (c) 2026. Andrew Kevin Bailey
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  *
  * The MIT License (MIT)
@@ -61,6 +61,7 @@ public:
   void calculateCorrectedTime(int32_t nanoCorrection);
   static uint8_t daysInMonth(uint8_t month, uint16_t year); // January = 1, December = 12
 	uint64_t secondsSince1900();
+  bool setSecondsSince1900(uint64_t seconds);
 	int8_t getTotalLeapSeconds();
 	// Get the number of leap seconds since January 6 1980 from GPS (UBX-NAV-TIMELS)
 	void setLeapSecondsSince1980(int8_t gpsLeapSeconds);

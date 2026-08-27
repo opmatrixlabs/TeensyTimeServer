@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025. Andrew Kevin Bailey
+ * Copyright (c) 2026. Andrew Kevin Bailey
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  *
  * The MIT License (MIT)
@@ -42,12 +42,12 @@ void TimeData::setLeapSecondsSince1980(int8_t gpsLeapSeconds) {
 	totalLeapSeconds_ = gpsLeapSeconds + LEAP_SECONDS_1980;
 }
 
-// Set the number of leap seconds since January 6 2025
+// Set the number of leap seconds since January 6, 2026
 void TimeData::setLeapSecondsSince2025() {
   totalLeapSeconds_ = LEAP_SECONDS_2025;
 }
 
-// Set the number of leap seconds since January 1 1900
+// Set the number of leap seconds since January 1, 1900
 int8_t TimeData::getTotalLeapSeconds() {
 	return totalLeapSeconds_;
 }
@@ -110,19 +110,15 @@ int32_t TimeData::getSubSec() {
 
 String TimeData::getISO8601Time(uint8_t decimalPrecision) {
   char strISO8601Time[64] = {0};
-  String strDecimal = String(subSec_);
+  char strNanoseconds[10] = {0};
+  const uint8_t precision = decimalPrecision > 9 ? 9 : decimalPrecision;
 
-  // Take only the first 3 digits (truncate if longer, pad if shorter)
-  if (strDecimal.length() > decimalPrecision) {
-    strDecimal = strDecimal.substring(0, decimalPrecision);
-  } 
-  else {
-    for (long i = 0; i < long(decimalPrecision - strDecimal.length()); i++) {
-      strDecimal = '0' + strDecimal; 
-    }
-  }
+  // subSec_ is nanoseconds, so its decimal representation always has a
+  // nine-digit scale. Preserve leading zeroes before truncating precision.
+  snprintf(strNanoseconds, sizeof(strNanoseconds), "%09lu", static_cast<unsigned long>(subSec_));
+  strNanoseconds[precision] = '\0';
 
-  sprintf(strISO8601Time, "%04u-%02u-%02uT%02u:%02u:%02u.%s", year_, month_, day_, hour_, min_, sec_, strDecimal.c_str());
+  sprintf(strISO8601Time, "%04u-%02u-%02uT%02u:%02u:%02u.%s", year_, month_, day_, hour_, min_, sec_, strNanoseconds);
   return String(strISO8601Time);
 }
 
@@ -235,6 +231,45 @@ uint64_t TimeData::secondsSince1900() {
                        min_ * 60ULL +
                        sec_;
     return seconds;
+}
+
+bool TimeData::setSecondsSince1900(uint64_t seconds) {
+  uint64_t days = seconds / 86400ULL;
+  uint32_t secondsOfDay = static_cast<uint32_t>(seconds % 86400ULL);
+  uint16_t year = 1900;
+
+  // TimeData stores a four-digit year. Reject values which cannot be
+  // represented instead of allowing the year counter to wrap.
+  while (year < 9999) {
+    const uint16_t daysInYear = isLeapYear(year) ? 366 : 365;
+    if (days < daysInYear)
+      break;
+    days -= daysInYear;
+    ++year;
+  }
+  if (year >= 9999)
+    return false;
+
+  uint8_t month = 1;
+  while (month <= 12) {
+    const uint8_t monthDays = daysInMonth(month, year);
+    if (days < monthDays)
+      break;
+    days -= monthDays;
+    ++month;
+  }
+  if (month > 12)
+    return false;
+
+  year_ = year;
+  month_ = month;
+  day_ = static_cast<uint8_t>(days + 1);
+  hour_ = static_cast<uint8_t>(secondsOfDay / 3600U);
+  secondsOfDay %= 3600U;
+  min_ = static_cast<uint8_t>(secondsOfDay / 60U);
+  sec_ = static_cast<uint8_t>(secondsOfDay % 60U);
+  subSec_ = 0;
+  return true;
 }
 
 void TimeData::validGpsTime(bool valid) {

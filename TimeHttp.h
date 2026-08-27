@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025. Andrew Kevin Bailey
+ * Copyright (c) 2026. Andrew Kevin Bailey
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  *
  * The MIT License (MIT)
@@ -48,32 +48,35 @@ public:
   TimeHttp();
   ~TimeHttp();
 
-  void setHttpClient(EthernetClient* client);
-  void setAppName(const String appName);
-  void setProperties(Properties* properties);
-  void setLocalIp(String localIp);
-  void setGpsFixType(String gpsFixType);
-  void setGpsISO8601Time(String gpsISO8601Time);
-  void setRtcISO8601Time(String rtcISO8601Time);
-  void setConfigString(String* config);
-  void setConfigFunction(void (*fptrGetGpsConfig)());
-  void setUpdateRtcFunction(void (*fptrUpdateRtc)());
-  void setAddErrorFunction(void (*fptrAddError)(String error));
-  void setAddLogFunction(void (*fptrAddLog)(String log));
-  void setLogArray(std::list<String>* usageLog);
-  void setErrorArray(std::list<String>* errorLog);
-  EthernetClient* getHttpClient();
-  const String getAppName();
-  Properties* getProperties();
-  String getLocalIp();
-  String getGpsFixType();
-  String getGpsISO8601Time();
-  String getRtcISO8601Time();
-  String* getConfigString();
+  void               setHttpClient(EthernetClient* client);
+  void               setAppName(const String appName);
+  void               setProperties(Properties* properties);
+  void               setLocalIp(String localIp);
+  void               setGpsFixType(String gpsFixType);
+  void               setGpsISO8601Time(String gpsISO8601Time);
+  void               setRtcISO8601Time(String rtcISO8601Time);
+  void               setConfigString(String* config);
+  void               setConfigFunction(void (*fptrGetGpsConfig)());
+  void               setGpsTimeFunction(String (*fptrGetGpsTime)());
+  void               setRtcTimeFunction(String (*fptrGetRtcTime)());
+  void               setUpdateRtcFunction(void (*fptrUpdateRtc)());
+  void               setAddErrorFunction(void (*fptrAddError)(String error));
+  void               setAddLogFunction(void (*fptrAddLog)(String log));
+  void               setLogArray(std::list<String>* usageLog);
+  void               setErrorArray(std::list<String>* errorLog);
+  EthernetClient*    getHttpClient();
+  String             getAppName();
+  Properties*        getProperties();
+  String             getLocalIp();
+  String             getGpsFixType();
+  String             getGpsISO8601Time();
+  String             getRtcISO8601Time();
+  String*            getConfigString();
   std::list<String>* getLogArray();
   std::list<String>* getErrorArray();
 
   bool processRequest();
+  bool processRequest(EthernetClient* client, String localIp, String gpsFixType);
   bool processRequest(EthernetClient* client, String localIp, String gpsFixType, String gpsISO8601Time, String rtcISO8601Time);
  
 private:
@@ -89,17 +92,20 @@ private:
   std::list<String>* pUsageLog_ = nullptr;
   std::list<String>* pErrorLog_ = nullptr;
   // Get GPS config function pointer
-  void (*fptrGetGpsConfig_)();
+  void (*fptrGetGpsConfig_)() = nullptr;
+  String (*fptrGetGpsTime_)() = nullptr;
+  String (*fptrGetRtcTime_)() = nullptr;
   // Get update RTC function pointer
-  void (*fptrUpdateRtc_)();
+  void (*fptrUpdateRtc_)() = nullptr;
   // Get addLog function pointer
-  void (*fptrAddLog_)(String log);
+  void (*fptrAddLog_)(String log) = nullptr;
   // Get addError function pointer
-  void (*fptrAddError_)(String error);
+  void (*fptrAddError_)(String error) = nullptr;
 
   String percentDecode(const String& strHtml, bool decodePlus = false);
   HtmlBodyValue_t getValueFromBody(String key, String& body, int startIndex);
   void sendHomePage();
+  void sendRtcTime();
   void sendHomePage(const String appName, Properties* properties, String localIp, String gpsISO8601Time, String rtcISO8601Time);
   void sendConfigPage();
   void sendConfigPage(String* config);

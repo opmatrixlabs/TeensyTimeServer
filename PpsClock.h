@@ -21,27 +21,41 @@
 
 #pragma once
 
-#include <stddef.h>
 #include <stdint.h>
 
 #include "NtpTimestamp.h"
 
-constexpr size_t NTP_PACKET_SIZE = 48;
+class PpsClock {
+public:
+  static constexpr uint32_t MIN_PULSE_INTERVAL_MICROS = 999000;
+  static constexpr uint32_t MAX_PULSE_INTERVAL_MICROS = 1001000;
+  static constexpr uint32_t MAX_ADVANCE_PULSES = 3600;
+  static constexpr uint32_t MAX_INTERPOLATION_MICROS = 2500000;
 
-enum class NtpResponseStatus : uint8_t {
-  Ready,
-  InvalidLength,
-  UnsupportedVersion,
-  InvalidMode,
-  ResponseBufferTooSmall
+  void reset();
+  bool setAnchor(uint32_t pulseCount,
+                 uint32_t edgeMicros,
+                 const NormalizedTimestamp& utcAtEdge);
+  bool setLabelledPulse(uint32_t pulseCount,
+                        uint32_t edgeMicros,
+                        uint32_t intervalMicros,
+                        const NormalizedTimestamp& utcAtEdge);
+  bool advanceToPulse(uint32_t pulseCount,
+                      uint32_t edgeMicros,
+                      uint32_t intervalMicros);
+  bool timestampAt(uint32_t captureMicros, NormalizedTimestamp* timestamp) const;
+  bool getAnchor(uint32_t* pulseCount,
+                 uint32_t* edgeMicros,
+                 NormalizedTimestamp* utcAtEdge) const;
+  bool isAnchored() const;
+
+  static bool isExpectedPulseInterval(uint32_t intervalMicros);
+
+private:
+  bool anchored_ = false;
+  bool intervalDisciplined_ = false;
+  uint32_t pulseCount_ = 0;
+  uint32_t edgeMicros_ = 0;
+  uint32_t disciplinedIntervalMicros_ = 1000000;
+  NormalizedTimestamp utcAtEdge_ = {};
 };
-
-NtpResponseStatus validateNtpRequest(const uint8_t* request, size_t requestLength);
-NtpResponseStatus createNtpResponse(const uint8_t* request,
-                                    size_t requestLength,
-                                    const NormalizedTimestamp& referenceTime,
-                                    const NormalizedTimestamp& receiveTime,
-                                    const NormalizedTimestamp& transmitTime,
-                                    bool timeAvailable,
-                                    uint8_t* response,
-                                    size_t responseCapacity);
