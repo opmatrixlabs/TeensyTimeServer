@@ -26,7 +26,7 @@
 
 #include "NtpTimestamp.h"
 
-constexpr size_t NTP_PACKET_SIZE = 48;
+constexpr std::size_t NTP_PACKET_SIZE = 48;
 
 enum class NtpResponseStatus : uint8_t {
   Ready,
@@ -36,12 +36,12 @@ enum class NtpResponseStatus : uint8_t {
   ResponseBufferTooSmall
 };
 
-NtpResponseStatus validateNtpRequest(const uint8_t* request, size_t requestLength);
+NtpResponseStatus validateNtpRequest(const uint8_t* request, std::size_t requestLength);
 NtpResponseStatus createNtpResponse(const uint8_t* request,
-                                    size_t requestLength,
+                                    std::size_t requestLength,
                                     const NormalizedTimestamp& referenceTime,
                                     const NormalizedTimestamp& receiveTime,
                                     const NormalizedTimestamp& transmitTime,
                                     bool timeAvailable,
                                     uint8_t* response,
-                                    size_t responseCapacity);
+                                    std::size_t responseCapacity);
