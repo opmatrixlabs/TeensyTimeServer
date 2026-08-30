@@ -74,7 +74,10 @@
     <ProjectCapability Include="VisualMicroLinux" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="FirmwareImageValidator.cpp" />
+    <ClCompile Include="FirmwareUpdater.cpp" />
     <ClCompile Include="GnssStatus.cpp" />
+    <ClCompile Include="IntelHexParser.cpp" />
     <ClCompile Include="NtpPacket.cpp" />
     <ClCompile Include="NtpTimestamp.cpp" />
     <ClCompile Include="PpsClock.cpp" />
@@ -93,7 +96,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="FirmwareImageValidator.h" />
+    <ClInclude Include="FirmwareUpdater.h" />
     <ClInclude Include="GnssStatus.h" />
+    <ClInclude Include="IntelHexParser.h" />
     <ClInclude Include="NtpPacket.h" />
     <ClInclude Include="NtpTimestamp.h">
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</DeploymentContent>

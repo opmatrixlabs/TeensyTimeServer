@@ -21,6 +21,137 @@
 
 #include "TimeHttp.h"
 
+#include <algorithm>
+
+namespace {
+
+constexpr std::size_t MAX_HTTP_HEADER_BYTES = 4096;
+constexpr uint32_t FIRMWARE_UPLOAD_IDLE_TIMEOUT_MILLIS = 15000;
+constexpr uint32_t FIRMWARE_UPLOAD_TOTAL_TIMEOUT_MILLIS = 600000;
+
+enum class HeaderLookup : uint8_t {
+  Missing,
+  Found,
+  Duplicate
+};
+
+char lowerAscii(const char value) {
+  if (value >= 'A' && value <= 'Z')
+    return static_cast<char>(value + ('a' - 'A'));
+  return value;
+}
+
+bool textEqualsIgnoreCase(const String& value, const char* expected) {
+  if (expected == nullptr)
+    return false;
+  std::size_t expectedLength = 0;
+  while (expected[expectedLength] != '\0')
+    ++expectedLength;
+  if (value.length() != expectedLength)
+    return false;
+  for (std::size_t index = 0; index < expectedLength; ++index) {
+    if (lowerAscii(value[index]) != lowerAscii(expected[index]))
+      return false;
+  }
+  return true;
+}
+
+bool requestLineMatches(const String& headers, const char* expected) {
+  int end = headers.indexOf('\n');
+  if (end < 0)
+    return false;
+  if (end > 0 && headers[end - 1] == '\r')
+    --end;
+  return headers.substring(0, end) == expected;
+}
+
+HeaderLookup findHeaderValueIgnoreCase(const String& headers, const char* name, String* value) {
+  if (name == nullptr || value == nullptr)
+    return HeaderLookup::Missing;
+
+  std::size_t nameLength = 0;
+  while (name[nameLength] != '\0')
+    ++nameLength;
+
+  int lineStart = headers.indexOf('\n');
+  if (lineStart < 0)
+    return HeaderLookup::Missing;
+  ++lineStart;
+  bool found = false;
+  while (lineStart < static_cast<int>(headers.length())) {
+    int lineEnd = headers.indexOf('\n', lineStart);
+    if (lineEnd < 0)
+      lineEnd = headers.length();
+    int contentEnd = lineEnd;
+    if (contentEnd > lineStart && headers[contentEnd - 1] == '\r')
+      --contentEnd;
+    if (contentEnd == lineStart)
+      break;
+
+    const int colon = headers.indexOf(':', lineStart);
+    if (colon > lineStart && colon < contentEnd && static_cast<std::size_t>(colon - lineStart) == nameLength) {
+      bool nameMatches = true;
+      for (std::size_t index = 0; index < nameLength; ++index) {
+        if (lowerAscii(headers[lineStart + index]) != lowerAscii(name[index])) {
+          nameMatches = false;
+          break;
+        }
+      }
+      if (nameMatches) {
+        if (found)
+          return HeaderLookup::Duplicate;
+        int valueStart = colon + 1;
+        while (valueStart < contentEnd && (headers[valueStart] == ' ' || headers[valueStart] == '\t'))
+          ++valueStart;
+        while (contentEnd > valueStart && (headers[contentEnd - 1] == ' ' || headers[contentEnd - 1] == '\t'))
+          --contentEnd;
+        *value = headers.substring(valueStart, contentEnd);
+        found = true;
+      }
+    }
+    lineStart = lineEnd + 1;
+  }
+  return found ? HeaderLookup::Found : HeaderLookup::Missing;
+}
+
+bool parseUint32Strict(const String& value, uint32_t* parsed) {
+  if (parsed == nullptr || value.length() == 0)
+    return false;
+  uint64_t result = 0;
+  for (std::size_t index = 0; index < value.length(); ++index) {
+    const char digit = value[index];
+    if (digit < '0' || digit > '9')
+      return false;
+    result = result * 10U + static_cast<uint8_t>(digit - '0');
+    if (result > UINT32_MAX)
+      return false;
+  }
+  *parsed = static_cast<uint32_t>(result);
+  return true;
+}
+
+bool mediaTypeEquals(const String& value, const char* expected) {
+  int end = value.indexOf(';');
+  if (end < 0)
+    end = value.length();
+  while (end > 0 && (value[end - 1] == ' ' || value[end - 1] == '\t'))
+    --end;
+  int start = 0;
+  while (start < end && (value[start] == ' ' || value[start] == '\t'))
+    ++start;
+  return textEqualsIgnoreCase(value.substring(start, end), expected);
+}
+
+bool hasHexFileExtension(const String& fileName) {
+  if (fileName.length() < 5 || fileName.length() > 128)
+    return false;
+  const std::size_t start = fileName.length() - 4;
+  return fileName[start] == '.' && lowerAscii(fileName[start + 1]) == 'h' &&
+         lowerAscii(fileName[start + 2]) == 'e' && lowerAscii(fileName[start + 3]) == 'x';
+}
+
+} // namespace
+
 TimeHttp::TimeHttp() 
 = default;
 
@@ -134,6 +265,18 @@ void TimeHttp::setErrorArray(std::list<String>* errorLog) {
   pErrorLog_ = errorLog;
 }
 
+void TimeHttp::setFirmwareUpdater(FirmwareUpdater* firmwareUpdater) {
+  pFirmwareUpdater_ = firmwareUpdater;
+}
+
+void TimeHttp::setFirmwareMaintenanceFunction(void (*function)(bool active)) {
+  fptrFirmwareMaintenance_ = function;
+}
+
+void TimeHttp::setFirmwareInstallFunction(void (*function)()) {
+  fptrFirmwareInstall_ = function;
+}
+
 std::list<String>* TimeHttp::getErrorArray() {
   return pErrorLog_;
 }
@@ -172,7 +315,7 @@ String TimeHttp::percentDecode(const String& strHtml, bool decodePlus) {
   return out;
 }
 
-HtmlBodyValue_t TimeHttp::getValueFromBody(String key, String& body, int startIndex) {
+HtmlBodyValue_t TimeHttp::getValueFromBody(String key, const String& body, int startIndex) {
   HtmlBodyValue_t bodyValue;
   int index = 0;
   key.append('=');
@@ -227,13 +370,23 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
       char c = pHttpClient_->read();
       if (isHeaders) {
         headers.append(c);
+        if (headers.length() > MAX_HTTP_HEADER_BYTES) {
+          sendPlainTextResponse(431,
+                                "Request Header Fields Too Large",
+                                "Request headers exceed the server limit.\n");
+          goto END_LOOP;
+        }
         // The end of the HTTP headers is indicated by a blank line.
         if (c == '\n') {
           // If the current line is blank, and there is two newline characters in a row, then that is the end of the HTTP headers.
           if (currentLine.length() == 0) {
             isHeaders = false;
             // Figure out which page to serve
-            if (headers.indexOf("GET /gpsconfig") >= 0) {
+            if (requestLineMatches(headers, "POST /firmware HTTP/1.1")) {
+              processFirmwareRequest(headers);
+              goto END_LOOP;
+            }
+            else if (headers.indexOf("GET /gpsconfig") >= 0) {
               if (headers.indexOf("?action=reload") >= 0) {
                 fptrGetGpsConfig_();
                 // Redirect back to the path to process URL form values
@@ -265,7 +418,6 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                 // No break, because we need to process the body
               }
               else { 
-                contentLength = 0;
                 break;
               }            
             }
@@ -288,7 +440,6 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                 // No break, because we need to process the body
               }
               else { 
-                contentLength = 0;
                 // Done. Break out of the loop.                
                 goto END_LOOP; 
               }
@@ -312,7 +463,6 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                 // No break, because we need to process the body
               }
               else { 
-                contentLength = 0;
                 // Done. Break out of the loop.
                 goto END_LOOP; 
               }
@@ -419,38 +569,86 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
                   HtmlBodyValue_t httpTimeoutMs;
                   HtmlBodyValue_t display;
                   HtmlBodyValue_t alternate;
-            
+                  bool restartRequired = false;
+
                   serverName = getValueFromBody("serverName", body, 0);
-                  if (serverName.found) pProperties_->setServerName(serverName.value.c_str());
+                  if (serverName.found) {
+                    const String previousValue = pProperties_->getServerName();
+                    pProperties_->setServerName(serverName.value.c_str());
+                    restartRequired |= pProperties_->getServerName() != previousValue;
+                  }
                   newPasscode = getValueFromBody("newPasscode", body, serverName.endIndex);
-                  if (newPasscode.found && newPasscode.value.length() > 0) pProperties_->setPasscode(newPasscode.value.c_str());
+                  if (newPasscode.found && newPasscode.value.length() > 0) {
+                    pProperties_->setPasscode(newPasscode.value.c_str());
+                    restartRequired = true;
+                  }
                   localIp = getValueFromBody("localIp", body, newPasscode.endIndex);
-                  if (localIp.found) pProperties_->setLocalIp(localIp.value.c_str());
+                  if (localIp.found) {
+                    const String previousValue = pProperties_->getLocalIpStr();
+                    pProperties_->setLocalIp(localIp.value.c_str());
+                    restartRequired |= pProperties_->getLocalIpStr() != previousValue;
+                  }
                   subnet = getValueFromBody("subnet", body, localIp.endIndex);
-                  if (subnet.found) pProperties_->setSubnet(subnet.value.c_str());
+                  if (subnet.found) {
+                    const String previousValue = pProperties_->getSubnetStr();
+                    pProperties_->setSubnet(subnet.value.c_str());
+                    restartRequired |= pProperties_->getSubnetStr() != previousValue;
+                  }
                   dns1Ip = getValueFromBody("dns1Ip", body, subnet.endIndex);
-                  if (dns1Ip.found) pProperties_->setDns1Ip(dns1Ip.value.c_str());
+                  if (dns1Ip.found) {
+                    const String previousValue = pProperties_->getDns1IpStr();
+                    pProperties_->setDns1Ip(dns1Ip.value.c_str());
+                    restartRequired |= pProperties_->getDns1IpStr() != previousValue;
+                  }
                   dns2Ip = getValueFromBody("dns2Ip", body, dns1Ip.endIndex);
-                  if (dns2Ip.found) pProperties_->setDns2Ip(dns2Ip.value.c_str());
+                  if (dns2Ip.found) {
+                    const String previousValue = pProperties_->getDns2IpStr();
+                    pProperties_->setDns2Ip(dns2Ip.value.c_str());
+                    restartRequired |= pProperties_->getDns2IpStr() != previousValue;
+                  }
                   gatewayIp = getValueFromBody("gatewayIp", body, dns2Ip.endIndex);
-                  if (gatewayIp.found) pProperties_->setGatewayIp(gatewayIp.value.c_str());
+                  if (gatewayIp.found) {
+                    const String previousValue = pProperties_->getGatewayIpStr();
+                    pProperties_->setGatewayIp(gatewayIp.value.c_str());
+                    restartRequired |= pProperties_->getGatewayIpStr() != previousValue;
+                  }
                   logMax = getValueFromBody("logMax", body, gatewayIp.endIndex);
-                  if (logMax.found) pProperties_->setLogMax(logMax.value.toInt());
+                  if (logMax.found) {
+                    const uint16_t previousValue = pProperties_->getLogMax();
+                    pProperties_->setLogMax(logMax.value.toInt());
+                    restartRequired |= pProperties_->getLogMax() != previousValue;
+                  }
                   errorMax = getValueFromBody("errorMax", body, logMax.endIndex);
-                  if (errorMax.found) pProperties_->setErrorMax(errorMax.value.toInt());              
+                  if (errorMax.found) {
+                    const uint16_t previousValue = pProperties_->getErrorMax();
+                    pProperties_->setErrorMax(errorMax.value.toInt());
+                    restartRequired |= pProperties_->getErrorMax() != previousValue;
+                  }
                   refreshFrequencyMs = getValueFromBody("refreshFrequencyMs", body, errorMax.endIndex);
-                  if (refreshFrequencyMs.found) pProperties_->setRefreshFrequency(refreshFrequencyMs.value.toInt());              
+                  if (refreshFrequencyMs.found) {
+                    const uint16_t previousValue = pProperties_->getRefreshFrequency();
+                    pProperties_->setRefreshFrequency(refreshFrequencyMs.value.toInt());
+                    restartRequired |= pProperties_->getRefreshFrequency() != previousValue;
+                  }
                   rtcSetFrequencyMs = getValueFromBody("rtcSetFrequencyMs", body, refreshFrequencyMs.endIndex);
-                  if (rtcSetFrequencyMs.found) pProperties_->setRtcSetFrequency(rtcSetFrequencyMs.value.toInt());              
+                  if (rtcSetFrequencyMs.found) {
+                    const uint32_t previousValue = pProperties_->getRtcSetFrequency();
+                    pProperties_->setRtcSetFrequency(rtcSetFrequencyMs.value.toInt());
+                    restartRequired |= pProperties_->getRtcSetFrequency() != previousValue;
+                  }
                   httpTimeoutMs = getValueFromBody("httpTimeoutMs", body, rtcSetFrequencyMs.endIndex);
-                  if (httpTimeoutMs.found) pProperties_->setHttpTimeout(httpTimeoutMs.value.toInt());              
+                  if (httpTimeoutMs.found) {
+                    const uint32_t previousValue = pProperties_->getHttpTimeout();
+                    pProperties_->setHttpTimeout(httpTimeoutMs.value.toInt());
+                    restartRequired |= pProperties_->getHttpTimeout() != previousValue;
+                  }
                   display = getValueFromBody("display", body, httpTimeoutMs.endIndex);
                   if (display.found) pProperties_->setDisplayOn(display.value.toInt());              
                   alternate = getValueFromBody("alternate", body, display.endIndex);
                   if (alternate.found) pProperties_->setDisplayAlternate(alternate.value.toInt()); 
 
                   pProperties_->saveProperties();             
-                  sendSetupPage(true);
+                  sendSetupPage(restartRequired);
                 }
                 else sendSetupPage(false);            
                 break;
@@ -472,6 +670,203 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
   // Close the connection
   pHttpClient_->stop();
   return true;
+}
+
+void TimeHttp::processFirmwareRequest(const String& headers) {
+  if (pFirmwareUpdater_ == nullptr || fptrFirmwareMaintenance_ == nullptr || fptrFirmwareInstall_ == nullptr) {
+    sendPlainTextResponse(503, "Service Unavailable", "Firmware update service is not configured.\n");
+    return;
+  }
+
+  String headerValue;
+  const HeaderLookup transferEncoding = findHeaderValueIgnoreCase(headers, "Transfer-Encoding", &headerValue);
+  if (transferEncoding != HeaderLookup::Missing) {
+    sendPlainTextResponse(400, "Bad Request", "Transfer-Encoding is not supported for firmware uploads.\n");
+    return;
+  }
+
+  const HeaderLookup lengthLookup = findHeaderValueIgnoreCase(headers, "Content-Length", &headerValue);
+  if (lengthLookup == HeaderLookup::Missing) {
+    sendPlainTextResponse(411, "Length Required", "A Content-Length header is required.\n");
+    return;
+  }
+  if (lengthLookup == HeaderLookup::Duplicate) {
+    sendPlainTextResponse(400, "Bad Request", "Content-Length must appear exactly once.\n");
+    return;
+  }
+  uint32_t contentLength = 0;
+  if (!parseUint32Strict(headerValue, &contentLength) || contentLength == 0) {
+    sendPlainTextResponse(400, "Bad Request", "Content-Length must be a positive decimal value.\n");
+    return;
+  }
+  if (contentLength > FirmwareUpdater::maxUploadBytes()) {
+    sendPlainTextResponse(413, "Content Too Large", "Firmware upload exceeds the staging limit.\n");
+    return;
+  }
+
+  const HeaderLookup typeLookup = findHeaderValueIgnoreCase(headers, "Content-Type", &headerValue);
+  if (typeLookup != HeaderLookup::Found || !mediaTypeEquals(headerValue, "application/x-intel-hex")) {
+    sendPlainTextResponse(415, "Unsupported Media Type", "Upload one plain Intel HEX (.hex) file.\n");
+    return;
+  }
+
+  const HeaderLookup nameLookup = findHeaderValueIgnoreCase(headers, "X-Firmware-Name", &headerValue);
+  if (nameLookup != HeaderLookup::Found) {
+    sendPlainTextResponse(400, "Bad Request", "X-Firmware-Name must appear exactly once.\n");
+    return;
+  }
+  const String fileName = percentDecode(headerValue, false);
+  bool printableName = true;
+  for (std::size_t index = 0; index < fileName.length(); ++index) {
+    if (fileName[index] < 0x20 || fileName[index] > 0x7E) {
+      printableName = false;
+      break;
+    }
+  }
+  if (!printableName || !hasHexFileExtension(fileName)) {
+    sendPlainTextResponse(415, "Unsupported Media Type", "Firmware filename must end in .hex.\n");
+    return;
+  }
+
+  const HeaderLookup passcodeLookup = findHeaderValueIgnoreCase(headers, "X-Firmware-Passcode", &headerValue);
+  if (passcodeLookup != HeaderLookup::Found) {
+    sendPlainTextResponse(403, "Forbidden", "A single valid firmware passcode header is required.\n");
+    return;
+  }
+  const String passcode = percentDecode(headerValue, false);
+  bool validPasscodeEncoding = true;
+  for (std::size_t index = 0; index < passcode.length(); ++index) {
+    if (passcode[index] == '\0' || passcode[index] == '\r' || passcode[index] == '\n') {
+      validPasscodeEncoding = false;
+      break;
+    }
+  }
+  if (!validPasscodeEncoding || !pProperties_->isPasscode(passcode.c_str())) {
+    if (fptrAddLog_ != nullptr)
+      fptrAddLog_("Invalid firmware passcode entered from " + pProperties_->generateIpString(pHttpClient_->remoteIP()));
+    sendPlainTextResponse(403, "Forbidden", "Firmware passcode is invalid.\n");
+    return;
+  }
+
+  bool sendContinue = false;
+  const HeaderLookup expectLookup = findHeaderValueIgnoreCase(headers, "Expect", &headerValue);
+  if (expectLookup == HeaderLookup::Duplicate ||
+      (expectLookup == HeaderLookup::Found && !textEqualsIgnoreCase(headerValue, "100-continue"))) {
+    sendPlainTextResponse(417, "Expectation Failed", "Only the 100-continue expectation is supported.\n");
+    return;
+  }
+  sendContinue = expectLookup == HeaderLookup::Found;
+
+  if (!pFirmwareUpdater_->begin(contentLength)) {
+    const String message = String("Firmware update cannot start: ") + pFirmwareUpdater_->error() + "\n";
+    sendPlainTextResponse(pFirmwareUpdater_->failure() == FirmwareUpdateFailure::ServerState ? 503 : 422,
+                          pFirmwareUpdater_->failure() == FirmwareUpdateFailure::ServerState ? "Service Unavailable" : "Unprocessable Content",
+                          message);
+    return;
+  }
+
+  fptrFirmwareMaintenance_(true);
+  if (sendContinue) {
+    pHttpClient_->println("HTTP/1.1 100 Continue");
+    pHttpClient_->println();
+  }
+
+  uint8_t uploadBuffer[256];
+  uint32_t remaining = contentLength;
+  uint32_t lastActivityMillis = millis();
+  const uint32_t uploadStartedMillis = lastActivityMillis;
+  while (remaining > 0) {
+    if (static_cast<uint32_t>(millis() - uploadStartedMillis) >= FIRMWARE_UPLOAD_TOTAL_TIMEOUT_MILLIS) {
+      pFirmwareUpdater_->abort();
+      fptrFirmwareMaintenance_(false);
+      sendPlainTextResponse(408, "Request Timeout", "Firmware upload timed out before completion.\n");
+      return;
+    }
+
+    const int available = pHttpClient_->available();
+    if (available > 0) {
+      const std::size_t requested = std::min<std::size_t>(
+          { static_cast<std::size_t>(available), sizeof(uploadBuffer), static_cast<std::size_t>(remaining) });
+      const int received = pHttpClient_->read(uploadBuffer, requested);
+      if (received > 0) {
+        remaining -= static_cast<uint32_t>(received);
+        if (!pFirmwareUpdater_->write(uploadBuffer, static_cast<std::size_t>(received))) {
+          const FirmwareUpdateFailure failure = pFirmwareUpdater_->failure();
+          const String message = String("Firmware rejected: ") + pFirmwareUpdater_->error() + "\n";
+          pFirmwareUpdater_->abort();
+          fptrFirmwareMaintenance_(false);
+          sendPlainTextResponse(failure == FirmwareUpdateFailure::FlashStorage ? 500 : 422,
+                                failure == FirmwareUpdateFailure::FlashStorage ? "Internal Server Error" : "Unprocessable Content",
+                                message);
+          return;
+        }
+        lastActivityMillis = millis();
+        continue;
+      }
+    }
+
+    const uint32_t now = millis();
+    if (!pHttpClient_->connected()) {
+      pFirmwareUpdater_->abort();
+      fptrFirmwareMaintenance_(false);
+      if (fptrAddLog_ != nullptr)
+        fptrAddLog_("Firmware upload disconnected before completion");
+      return;
+    }
+    if (static_cast<uint32_t>(now - lastActivityMillis) >= FIRMWARE_UPLOAD_IDLE_TIMEOUT_MILLIS) {
+      pFirmwareUpdater_->abort();
+      fptrFirmwareMaintenance_(false);
+      sendPlainTextResponse(408, "Request Timeout", "Firmware upload timed out before completion.\n");
+      return;
+    }
+    delay(1);
+  }
+
+  if (static_cast<uint32_t>(millis() - uploadStartedMillis) >= FIRMWARE_UPLOAD_TOTAL_TIMEOUT_MILLIS) {
+    pFirmwareUpdater_->abort();
+    fptrFirmwareMaintenance_(false);
+    sendPlainTextResponse(408, "Request Timeout", "Firmware upload timed out before completion.\n");
+    return;
+  }
+
+  if (!pFirmwareUpdater_->finish()) {
+    const FirmwareUpdateFailure failure = pFirmwareUpdater_->failure();
+    const String message = String("Firmware rejected: ") + pFirmwareUpdater_->error() + "\n";
+    pFirmwareUpdater_->abort();
+    fptrFirmwareMaintenance_(false);
+    sendPlainTextResponse(failure == FirmwareUpdateFailure::FlashStorage ? 500 : 422,
+                          failure == FirmwareUpdateFailure::FlashStorage ? "Internal Server Error" : "Unprocessable Content",
+                          message);
+    return;
+  }
+
+  const uint32_t imageSize = pFirmwareUpdater_->imageSize();
+  if (fptrAddLog_ != nullptr)
+    fptrAddLog_("Firmware image validated from " + pProperties_->generateIpString(pHttpClient_->remoteIP()) +
+                ": " + String(imageSize) + " bytes");
+  sendHttpWait();
+  // EthernetClient::write waits for W5500 SEND_OK. Avoid its unbounded flush()
+  // loop, then give the graceful FIN a short, bounded timeout.
+  pHttpClient_->setConnectionTimeout(250);
+  pHttpClient_->stop();
+
+  // The callback schedules installation after a short browser-rendering grace
+  // period. The main loop performs the non-returning flash replacement.
+  fptrFirmwareInstall_();
+}
+
+void TimeHttp::sendPlainTextResponse(const uint16_t statusCode, const char* reason, const String& message) {
+  pHttpClient_->print("HTTP/1.1 ");
+  pHttpClient_->print(statusCode);
+  pHttpClient_->print(' ');
+  pHttpClient_->println(reason);
+  pHttpClient_->println("Content-Type: text/plain; charset=utf-8");
+  pHttpClient_->println("Cache-Control: no-store");
+  pHttpClient_->print("Content-Length: ");
+  pHttpClient_->println(message.length());
+  pHttpClient_->println("Connection: close");
+  pHttpClient_->println();
+  pHttpClient_->print(message);
 }
 
 void TimeHttp::sendHomePage(const String appName, Properties* properties, String localIp, String gpsISO8601Time, String rtcISO8601Time) {
@@ -595,7 +990,7 @@ void TimeHttp::sendLogPage() {
   pHttpClient_->println("</div>");
   //
   pHttpClient_->println("<p>");
-  for (String entry : *pUsageLog_) {
+  for (const String& entry : *pUsageLog_) {
     pHttpClient_->println(entry);
     pHttpClient_->println("<br>");
   }
@@ -632,7 +1027,7 @@ void TimeHttp::sendErrorPage() {
   pHttpClient_->println("</div>");
   //
   pHttpClient_->println("<p>");
-  for (String entry : *pErrorLog_) {
+  for (const String& entry : *pErrorLog_) {
     pHttpClient_->println(entry);
     pHttpClient_->println("<br>");
   }
@@ -660,6 +1055,24 @@ void TimeHttp::sendSetupPage(bool isSaved) {
   pHttpClient_->println("if (!pass) return false;");
   pHttpClient_->println("form.querySelector(\"#\" + hiddenId).value = pass;");
   pHttpClient_->println("return true;");
+  pHttpClient_->println("}");
+  pHttpClient_->println("async function uploadFirmware() {");
+  pHttpClient_->println("const file = document.querySelector('#firmwareFile').files[0];");
+  pHttpClient_->println("const button = document.querySelector('#firmwareUploadButton');");
+  pHttpClient_->println("const status = document.querySelector('#firmwareStatus');");
+  pHttpClient_->println("if (!file) { status.textContent = 'Select a .hex firmware file first.'; return; }");
+  pHttpClient_->println("if (!/\\.hex$/i.test(file.name)) { status.textContent = 'Only a plain .hex file is supported.'; return; }");
+  pHttpClient_->println("const pass = prompt('Enter Passcode:');");
+  pHttpClient_->println("if (!pass) return;");
+  pHttpClient_->println("if (!confirm('After validation, installation is not power-fail-safe. Do not remove power until the server has rebooted. Continue?')) return;");
+  pHttpClient_->println("button.disabled = true; status.textContent = 'Uploading and validating firmware...';");
+  pHttpClient_->println("try {");
+  pHttpClient_->println("const response = await fetch('/firmware', {method:'POST', cache:'no-store', headers:{'Content-Type':'application/x-intel-hex','X-Firmware-Name':encodeURIComponent(file.name),'X-Firmware-Passcode':encodeURIComponent(pass)}, body:file});");
+  pHttpClient_->println("const responseBody = await response.text();");
+  pHttpClient_->println("if (response.ok) { document.open(); document.write(responseBody); document.close(); return; }");
+  pHttpClient_->println("status.textContent = responseBody.trim(); status.style.color = 'red';");
+  pHttpClient_->println("button.disabled = false;");
+  pHttpClient_->println("} catch (error) { status.textContent = 'Upload failed: ' + error; status.style.color = 'red'; button.disabled = false; }");
   pHttpClient_->println("}</script>");
 
   pHttpClient_->println("</head><body>");
@@ -697,6 +1110,12 @@ void TimeHttp::sendSetupPage(bool isSaved) {
   pHttpClient_->print("<input style=\"margin-left:10px; margin-top:-2px;\" type=\"radio\" id=\"alternateOn\" name=\"alternate\" value=\"1\""); if (pProperties_->getDisplayAlternate() == 1) pHttpClient_->print(" checked"); pHttpClient_->print("><label for=\"alternateOn\">On</label>");
   pHttpClient_->print("<input style=\"margin-left:-85px; margin-top:-2px;\" type=\"radio\" id=\"alternateOff\" name=\"alternate\" value=\"0\""); if (pProperties_->getDisplayAlternate() == 0) pHttpClient_->print(" checked"); pHttpClient_->print("><label for=\"alternateOff\">Off</label></div>");
   pHttpClient_->println("</div></form></div>");
+  pHttpClient_->println("<hr><section><h3>Firmware Update</h3>");
+  pHttpClient_->println("<p>Upload a plain Teensy MicroMod <code>.hex</code> build. NTP service pauses during upload and the server restarts after validation.</p>");
+  pHttpClient_->println("<p style=\"color:#b00020\"><b>Do not remove power during installation.</b> A power loss after validation can require USB and the DEV-20748 BOOT button for recovery.</p>");
+  pHttpClient_->println("<input id=\"firmwareFile\" type=\"file\" accept=\".hex,application/x-intel-hex\">");
+  pHttpClient_->println("<button id=\"firmwareUploadButton\" type=\"button\" onclick=\"uploadFirmware()\">Upload Firmware</button>");
+  pHttpClient_->println("<output id=\"firmwareStatus\" style=\"display:block;margin-top:10px;white-space:pre-wrap\"></output></section>");
   if (isSaved) {
     pHttpClient_->println("<p style=\"font-size: x-large; color: green;\">Settings saved to EEPROM. Restart to take affect.</p>");
   }

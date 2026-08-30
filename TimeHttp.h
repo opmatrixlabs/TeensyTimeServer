@@ -23,6 +23,7 @@
 
 #include <list>
 #include <Ethernet.h>
+#include "FirmwareUpdater.h"
 #include "Properties.h"
 
 // Converts a single hexadecimal digit character into its numeric value for HTML escape character conversion.
@@ -64,6 +65,9 @@ public:
   void               setAddLogFunction(void (*fptrAddLog)(String log));
   void               setLogArray(std::list<String>* usageLog);
   void               setErrorArray(std::list<String>* errorLog);
+  void               setFirmwareUpdater(FirmwareUpdater* firmwareUpdater);
+  void               setFirmwareMaintenanceFunction(void (*function)(bool active));
+  void               setFirmwareInstallFunction(void (*function)());
   EthernetClient*    getHttpClient();
   String             getAppName();
   Properties*        getProperties();
@@ -101,9 +105,12 @@ private:
   void (*fptrAddLog_)(String log) = nullptr;
   // Get addError function pointer
   void (*fptrAddError_)(String error) = nullptr;
+  FirmwareUpdater* pFirmwareUpdater_ = nullptr;
+  void (*fptrFirmwareMaintenance_)(bool active) = nullptr;
+  void (*fptrFirmwareInstall_)() = nullptr;
 
   String percentDecode(const String& strHtml, bool decodePlus = false);
-  HtmlBodyValue_t getValueFromBody(String key, String& body, int startIndex);
+  HtmlBodyValue_t getValueFromBody(String key, const String& body, int startIndex);
   void sendHomePage();
   void sendRtcTime();
   void sendHomePage(const String appName, Properties* properties, String localIp, String gpsISO8601Time, String rtcISO8601Time);
@@ -114,5 +121,7 @@ private:
   void sendSetupPage(bool isSaved);
   void sendPasscodeError(WebPage page);
   void sendHttpWait();
+  void processFirmwareRequest(const String& headers);
+  void sendPlainTextResponse(uint16_t statusCode, const char* reason, const String& message);
   void restartTeensy();
 };
