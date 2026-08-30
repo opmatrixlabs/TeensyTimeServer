@@ -10,7 +10,7 @@ The design favors timing accuracy and unattended operation. NTP timestamps are d
 
 The code was written and built with Visual Studio 2026 with the Visual Micro Ardunio for Visual Studio extension.  However, you can use Arduino IDE 2.3 or greater to build the code.
 
-I started writing TeensyTimeServe in 2023 and slowly added features over the years.  This project was not vibe coded.  I did 99% of it myself.  However, in August 2026 I use ChatGPT 5.6 Sol to create test code to find some intermittent issues that were causing TeensyTimeServer to freeze and then fix them.  Also, I had ChatGPT create some of the text in this readme. 
+I started writing TeensyTimeServe in 2023 and slowly added features over the years.  This project was not vibe coded.  I did 99% of it myself.  However, in August 2026 I use ChatGPT 5.6 Sol to create test code to find some intermittent issues that were causing TeensyTimeServer to freeze and then fix them.  Also, I had ChatGPT create more code comments and write some of the text in this readme. 
 
 ## Components
 
