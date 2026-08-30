@@ -82,6 +82,10 @@ The firmware supervises W5500 responsiveness, physical link state, DHCP maintena
 
 The RV-1805 RTC is plugged into the DEV-20748's second Qwiic connector, and is used for log timestamps.  This allows accurate date-time on event and error logs even if the GNSS signal is not available.  If the RTC has an issue, the date-time on event and error logs will use the GNSS if available.
 
+### Savable settings
+
+TeensyTimeServer saves configuration changes from the web setup page to non-volatile EEPROM. The settings persist through restarts and power loss.
+
 ### Passcode for setup changes
 
 Configuration changes and firmware uploads are protected form changes by a passcode. Users must enter the correct passcode before the server will accept and save protected changes.  There are two passcode.  One is the passcode setup by the user on the Setup page.  The other is a master override password in the Properties.h file. **Don't forget to change this for your build**.
