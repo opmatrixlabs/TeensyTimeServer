@@ -85,7 +85,7 @@ bool IntelHexParser::sawEndOfFile() const {
 
 IntelHexParseResult IntelHexParser::parseLine(IntelHexRecord* record) {
   line_[lineLength_] = '\0';
-  const size_t length = lineLength_;
+  const std::size_t length = lineLength_;
   lineLength_ = 0;
 
   if (sawEndOfFile_)
@@ -98,19 +98,19 @@ IntelHexParseResult IntelHexParser::parseLine(IntelHexRecord* record) {
   uint8_t byteCount = 0;
   if (!decodeByte(line_ + 1, &byteCount))
     return fail("Intel HEX byte count is not hexadecimal");
-  const size_t expectedLength = 11U + static_cast<size_t>(byteCount) * 2U;
+  const std::size_t expectedLength = 11U + static_cast<std::size_t>(byteCount) * 2U;
   if (length != expectedLength)
     return fail("Intel HEX record length does not match its byte count");
 
-  const size_t decodedLength = static_cast<size_t>(byteCount) + 5U;
+  const std::size_t decodedLength = static_cast<std::size_t>(byteCount) + 5U;
   uint8_t decoded[260];
-  for (size_t index = 0; index < decodedLength; ++index) {
+  for (std::size_t index = 0; index < decodedLength; ++index) {
     if (!decodeByte(line_ + 1U + index * 2U, decoded + index))
       return fail("Intel HEX record contains a non-hexadecimal digit");
   }
 
   uint8_t checksum = 0;
-  for (size_t index = 0; index < decodedLength; ++index)
+  for (std::size_t index = 0; index < decodedLength; ++index)
     checksum = static_cast<uint8_t>(checksum + decoded[index]);
   if (checksum != 0)
     return fail("Intel HEX record checksum is invalid");
@@ -118,7 +118,7 @@ IntelHexParseResult IntelHexParser::parseLine(IntelHexRecord* record) {
   record->byteCount = decoded[0];
   record->address = static_cast<uint16_t>((static_cast<uint16_t>(decoded[1]) << 8) | decoded[2]);
   record->type = decoded[3];
-  for (size_t index = 0; index < byteCount; ++index)
+  for (std::size_t index = 0; index < byteCount; ++index)
     record->data[index] = decoded[4U + index];
 
   if (record->type == 0x01)

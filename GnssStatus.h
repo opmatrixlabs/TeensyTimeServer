@@ -19,6 +19,7 @@
  * SOFTWARE.
  */
 
+// ReSharper disable CppUnusedIncludeDirective
 #pragma once
 
 #include <stdint.h>

@@ -34,7 +34,7 @@ constexpr uint8_t NTP_PRECISION_MINUS_9 = 0xF7;
 constexpr uint8_t NTP_ROOT_DISPERSION_LOW_BYTE = 0x50;
 }
 
-NtpResponseStatus validateNtpRequest(const uint8_t* request, const size_t requestLength) {
+NtpResponseStatus validateNtpRequest(const uint8_t* request, const std::size_t requestLength) {
   if (request == nullptr || requestLength != NTP_PACKET_SIZE)
     return NtpResponseStatus::InvalidLength;
 
@@ -50,13 +50,13 @@ NtpResponseStatus validateNtpRequest(const uint8_t* request, const size_t reques
 }
 
 NtpResponseStatus createNtpResponse(const uint8_t* request,
-                                    const size_t requestLength,
+                                    const std::size_t requestLength,
                                     const NormalizedTimestamp& referenceTime,
                                     const NormalizedTimestamp& receiveTime,
                                     const NormalizedTimestamp& transmitTime,
                                     const bool timeAvailable,
                                     uint8_t* response,
-                                    const size_t responseCapacity) {
+                                    const std::size_t responseCapacity) {
   const NtpResponseStatus requestStatus = validateNtpRequest(request, requestLength);
   if (requestStatus != NtpResponseStatus::Ready)
     return requestStatus;

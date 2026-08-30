@@ -408,7 +408,7 @@ bool readRtcRegisters(const uint8_t firstRegister,
     return false;
 
   Wire.beginTransmission(RV1805_ADDR);
-  const size_t addressBytesWritten = Wire.write(firstRegister);
+  const std::size_t addressBytesWritten = Wire.write(firstRegister);
   const uint8_t addressStatus = Wire.endTransmission(false);
   if (addressBytesWritten != 1U || addressStatus != 0)
     return false;
@@ -2951,18 +2951,16 @@ String getPpsISO8601Time(const uint8_t decimalPrecision) {
 
 String getFallbackISO8601Time() {
   String timestamp = getPpsISO8601Time(2);
-  if (timestamp.length() > 0)
-    return timestamp;
-
-  return String(ENTRY_TIMESTAMP_PLACEHOLDER);
+  if (timestamp.length() == 0)
+    timestamp = ENTRY_TIMESTAMP_PLACEHOLDER;
+  return timestamp;
 }
 
 String getEntryISO8601Time() {
   String timestamp = getRtcISO8601Time();
-  if (timestamp.length() > 0)
-    return timestamp;
-
-  return getFallbackISO8601Time();
+  if (timestamp.length() == 0)
+    timestamp = getFallbackISO8601Time();
+  return timestamp;
 }
 
 void appendTimestampedError(String error) {

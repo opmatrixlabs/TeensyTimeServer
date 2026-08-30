@@ -3,9 +3,10 @@
  * This code, firmware, and software is released under the MIT License (http://opensource.org/licenses/MIT).
  */
 
+// ReSharper disable CppUnusedIncludeDirective
 #pragma once
 
-#include <stddef.h>
+#include <cstddef>
 #include <stdint.h>
 
 constexpr uint8_t RV1805_TIMESTAMP_REGISTER_COUNT = 8;
@@ -23,5 +24,5 @@ struct RtcDateTime {
 // Decode one complete RV-1805 time-register burst. General-purpose bits which
 // share the time registers are masked according to the RV-1805 register map.
 bool decodeRv1805Timestamp(const uint8_t* registers,
-                           size_t registerCount,
+                           std::size_t registerCount,
                            RtcDateTime* timestamp);

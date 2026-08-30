@@ -55,7 +55,7 @@ uint8_t daysInMonth(const uint8_t month, const uint16_t year) {
 } // namespace
 
 bool decodeRv1805Timestamp(const uint8_t* registers,
-                           const size_t registerCount,
+                           const std::size_t registerCount,
                            RtcDateTime* timestamp) {
   if (registers == nullptr || timestamp == nullptr ||
       registerCount != RV1805_TIMESTAMP_REGISTER_COUNT)

@@ -19,6 +19,7 @@
  * SOFTWARE.
  */
 
+// ReSharper disable CppUnusedIncludeDirective
 #include "GnssStatus.h"
 
 #include <limits.h>
