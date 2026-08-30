@@ -56,6 +56,14 @@ void testRtcHundredthsFormattingIsUnchanged() {
                      "2026-08-26T12:34:56.30");
 }
 
+void testPpsLogPrecisionUsesTwoDigits() {
+  TimeData time(2026, 8, 30, 18, 20, 55, 123456789);
+  assertStringEquals(time.getISO8601Time(2), "2026-08-30T18:20:55.12");
+
+  time.setSubSec(0);
+  assertStringEquals(time.getISO8601Time(2), "2026-08-30T18:20:55.00");
+}
+
 void testSecondsSince1900RoundTrip() {
   const TimeData samples[] = {
       TimeData(1900, 1, 1, 0, 0, 0, 0),
@@ -78,6 +86,7 @@ void testSecondsSince1900RoundTrip() {
 int main() {
   testNanosecondsRetainTheirNineDigitScale();
   testRtcHundredthsFormattingIsUnchanged();
+  testPpsLogPrecisionUsesTwoDigits();
   testSecondsSince1900RoundTrip();
   return 0;
 }

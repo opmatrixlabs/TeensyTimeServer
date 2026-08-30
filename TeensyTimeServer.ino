@@ -47,6 +47,7 @@
 #include "PpsClock.h"
 #include "GnssStatus.h"
 #include "FirmwareUpdater.h"
+#include "RtcTimestamp.h"
 
 // Forward declarations keep the sketch valid for standard C++ IntelliSense.
 void getDeviceConfig();
@@ -352,6 +353,8 @@ uint32_t firmwareInstallRequestedMillis = 0;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace {
 
+void recordRtcTimestampError(String error);
+
 struct GnssVal8Setting {
   uint32_t key;
   uint8_t value;
@@ -391,6 +394,65 @@ constexpr GnssVal8Setting GNSS_VAL8_SETTINGS[] = {
 
 bool hasElapsed(const uint32_t now, const uint32_t since, const uint32_t interval) {
   return static_cast<uint32_t>(now - since) >= interval;
+}
+
+void discardRtcReceiveBuffer() {
+  while (Wire.available() > 0)
+    static_cast<void>(Wire.read());
+}
+
+bool readRtcRegisters(const uint8_t firstRegister,
+                      uint8_t* registers,
+                      const uint8_t registerCount) {
+  if (registers == nullptr || registerCount == 0)
+    return false;
+
+  Wire.beginTransmission(RV1805_ADDR);
+  const size_t addressBytesWritten = Wire.write(firstRegister);
+  const uint8_t addressStatus = Wire.endTransmission(false);
+  if (addressBytesWritten != 1U || addressStatus != 0)
+    return false;
+
+  const uint8_t received = Wire.requestFrom(RV1805_ADDR,
+                                             registerCount,
+                                             static_cast<uint8_t>(true));
+  if (received != registerCount ||
+      Wire.available() != static_cast<int>(registerCount)) {
+    discardRtcReceiveBuffer();
+    return false;
+  }
+
+  for (uint8_t index = 0; index < registerCount; ++index) {
+    const int value = Wire.read();
+    if (value < 0) {
+      discardRtcReceiveBuffer();
+      return false;
+    }
+    registers[index] = static_cast<uint8_t>(value);
+  }
+
+  return true;
+}
+
+enum class RtcTimestampReadStatus : uint8_t {
+  Success,
+  TransportFailure,
+  InvalidTimestamp
+};
+
+RtcTimestampReadStatus readRtcDateTime(RtcDateTime* timestamp) {
+  if (timestamp == nullptr)
+    return RtcTimestampReadStatus::InvalidTimestamp;
+
+  uint8_t registers[RV1805_TIMESTAMP_REGISTER_COUNT] = {};
+  if (!readRtcRegisters(RV1805_HUNDREDTHS,
+                        registers,
+                        RV1805_TIMESTAMP_REGISTER_COUNT))
+    return RtcTimestampReadStatus::TransportFailure;
+
+  return decodeRv1805Timestamp(registers, sizeof(registers), timestamp)
+             ? RtcTimestampReadStatus::Success
+             : RtcTimestampReadStatus::InvalidTimestamp;
 }
 
 uint32_t gnssRetryBackoff(const uint8_t attempt) {
@@ -1252,7 +1314,13 @@ void serviceRtcInitialization() {
   rtc.setPowerSwitchLock(true);
   rtc.setAlarmMode(0);
   rtc.set24Hour();
-  if (!rtc.updateTime()) {
+  uint8_t control1 = 0;
+  RtcDateTime initialRtcTime = {};
+  const bool modeVerified = readRtcRegisters(RV1805_CTRL1, &control1, 1) &&
+                            (control1 & (1U << CTRL1_12_24)) == 0;
+  const RtcTimestampReadStatus initialTimeStatus = readRtcDateTime(&initialRtcTime);
+  if (!modeVerified ||
+      initialTimeStatus == RtcTimestampReadStatus::TransportFailure) {
     noteI2cInitializationResult(false);
     if (!rtcInitializationFailureReported) {
       rtcInitializationFailureReported = true;
@@ -1263,14 +1331,16 @@ void serviceRtcInitialization() {
 
   noteI2cInitializationResult(true);
   rtcAvailable = true;
-  rtcReadErrorReported = false;
+  rtcReadErrorReported = initialTimeStatus == RtcTimestampReadStatus::InvalidTimestamp;
+  if (rtcReadErrorReported)
+    recordError("RTC contained an invalid timestamp; waiting for UTC TP1 synchronization");
+  setRtc();
 
   if (rtcInitializationFailureReported)
     addLog("Real time clock recovered after startup retry");
   else
     Serial.println("Real time clock initialized");
   rtcInitializationFailureReported = false;
-  setRtc();
 }
 
 void serviceDisplayInitialization() {
@@ -2631,34 +2701,56 @@ void serviceRtcSync() {
 }
 
 String getRtcISO8601Time() {
-  if (!rtcAvailable || rtc.updateTime() == false) { // Updates the time variables from RTC.
-    if (rtcAvailable) {
-      rtcAvailable = false;
-      lastRtcInitializationAttemptMillis =
-          millis() - RTC_INITIALIZATION_RETRY_MILLIS;
-    }
+  if (!rtcAvailable)
+    return String("");
+
+  RtcDateTime rtcTime = {};
+  const RtcTimestampReadStatus status = readRtcDateTime(&rtcTime);
+  if (status == RtcTimestampReadStatus::TransportFailure) {
+    rtcAvailable = false;
+    lastRtcInitializationAttemptMillis =
+        millis() - RTC_INITIALIZATION_RETRY_MILLIS;
     if (!rtcReadErrorReported) {
       rtcReadErrorReported = true;
-      recordError("RTC failed to update");
+      recordRtcTimestampError("RTC returned an incomplete or invalid timestamp; retrying");
+    }
+    return String("");
+  }
+  if (status == RtcTimestampReadStatus::InvalidTimestamp) {
+    if (rtcSyncState == RtcSyncState::Idle)
+      setRtc();
+    if (!rtcReadErrorReported) {
+      rtcReadErrorReported = true;
+      recordRtcTimestampError("RTC returned an invalid timestamp; waiting for UTC TP1 synchronization");
     }
     return String("");
   }
   rtcReadErrorReported = false;
 
-  uint16_t year = 2000 + rtc.getYear();
-  return t.toISO8601Time(year, rtc.getMonth(), rtc.getDate(), rtc.getHours(), rtc.getMinutes(), rtc.getSeconds(), rtc.getHundredths(), 2);
+  return t.toISO8601Time(rtcTime.year,
+                         rtcTime.month,
+                         rtcTime.day,
+                         rtcTime.hour,
+                         rtcTime.minute,
+                         rtcTime.second,
+                         rtcTime.hundredths,
+                         2);
 }
 
 String getRtcWebISO8601Time() {
-  const uint8_t oscillatorStatus = rtcAvailable ? rtc.readRegister(RV1805_OSC_STATUS) : 0xFF;
-  const bool hundredthsAvailable = oscillatorStatus != 0xFF &&
-                                   (oscillatorStatus & RTC_OSCILLATOR_MODE_RC_MASK) == 0;
-  if (rtcHundredthsAvailable && !hundredthsAvailable)
-    recordError("RTC XT oscillator unavailable; web fractional time disabled");
-  rtcHundredthsAvailable = hundredthsAvailable;
+  uint8_t oscillatorStatus = 0;
+  const bool oscillatorStatusRead =
+      rtcAvailable && readRtcRegisters(RV1805_OSC_STATUS, &oscillatorStatus, 1);
+  if (oscillatorStatusRead) {
+    const bool hundredthsAvailable =
+        (oscillatorStatus & RTC_OSCILLATOR_MODE_RC_MASK) == 0;
+    if (rtcHundredthsAvailable && !hundredthsAvailable)
+      recordError("RTC XT oscillator unavailable; web fractional time disabled");
+    rtcHundredthsAvailable = hundredthsAvailable;
+  }
 
   String rtcTime = getRtcISO8601Time();
-  if (rtcTime.length() == 0 || hundredthsAvailable)
+  if (rtcTime.length() == 0 || rtcHundredthsAvailable)
     return rtcTime;  // NOLINT(clang-diagnostic-nrvo)
 
   if (rtcTime.length() >= 3)
@@ -2739,6 +2831,7 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
 
   NormalizedTimestamp referenceTime = {};
   NormalizedTimestamp receiveTime = {};
+  const char* deferredNtpClockError = nullptr;
   bool timeAvailable = getPpsTimestamp(receiveCaptureMicros, &receiveTime);
   if (timeAvailable) {
     uint32_t referencePulseCount = 0;
@@ -2750,7 +2843,8 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
   if (!timeAvailable) {
     if (!ntpClockUnavailableReported) {
       ntpClockUnavailableReported = true;
-      recordError("NTP clock unsynchronized: waiting for a confirmed UTC TP1/TIM-TP timebase");
+      deferredNtpClockError =
+          "NTP clock unsynchronized: waiting for a confirmed UTC TP1/TIM-TP timebase";
     }
   }
   else {
@@ -2766,10 +2860,15 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
                                                              timeAvailable,
                                                              response,
                                                              sizeof(response));
-  if (responseStatus != NtpResponseStatus::Ready)
+  if (responseStatus != NtpResponseStatus::Ready) {
+    if (deferredNtpClockError != nullptr)
+      recordError(deferredNtpClockError);
     return;
+  }
 
   if (udp.beginPacket(remoteIp, remotePort) == 0) {
+    if (deferredNtpClockError != nullptr)
+      recordError(deferredNtpClockError);
     addError("Could not begin NTP response to " + properties.generateIpString(remoteIp));
     requestEthernetSocketRecovery("could not begin an NTP response", true);
     return;
@@ -2796,7 +2895,8 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
                         sizeof(response));
       if (!ntpClockUnavailableReported) {
         ntpClockUnavailableReported = true;
-        recordError("NTP clock became unsynchronized while constructing a response");
+        deferredNtpClockError =
+            "NTP clock became unsynchronized while constructing a response";
       }
     }
   }
@@ -2805,24 +2905,36 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
   // writes. One 48-byte write is required to produce one valid 48-byte NTP
   // datagram and to keep T3 at bytes 40-47.
   if (udp.write(response, sizeof(response)) != sizeof(response)) {
+    if (deferredNtpClockError != nullptr)
+      recordError(deferredNtpClockError);
     addError("Could not write NTP response to " + properties.generateIpString(remoteIp));
     requestEthernetSocketRecovery("could not write an NTP response", true);
     return;
   }
 
   if (udp.endPacket() == 0) {
+    if (deferredNtpClockError != nullptr)
+      recordError(deferredNtpClockError);
     addError("Could not send NTP response to " + properties.generateIpString(remoteIp));
     requestEthernetSocketRecovery("could not send an NTP response", true);
     return;
   }
 
   // RTC I2C and dynamic String/list work happen only after the response left.
+  if (deferredNtpClockError != nullptr)
+    recordError(deferredNtpClockError);
   addLog(String(timeAvailable ? "Synchronized" : "Unsynchronized") +
          " NTP response to " + properties.generateIpString(remoteIp) +
          ", port " + String(remotePort));
 }
 
-String getGpsISO8601Time() {
+namespace {
+
+constexpr char ENTRY_TIMESTAMP_PLACEHOLDER[] = "____-__-__T__:__:__.__";
+static_assert(sizeof(ENTRY_TIMESTAMP_PLACEHOLDER) - 1 == 22,
+              "Entry timestamp placeholder must match YYYY-MM-DDTHH:MM:SS.hh");
+
+String getPpsISO8601Time(const uint8_t decimalPrecision) {
   NormalizedTimestamp timestamp = {};
   if (!getPpsTimestamp(micros(), &timestamp) ||
       timestamp.secondsSince1900 < 0)
@@ -2834,7 +2946,47 @@ String getGpsISO8601Time() {
     return "";
 
   gpsTime.setSubSec(static_cast<int32_t>(timestamp.nanoseconds));
-  return gpsTime.getISO8601Time(6);
+  return gpsTime.getISO8601Time(decimalPrecision);
+}
+
+String getFallbackISO8601Time() {
+  String timestamp = getPpsISO8601Time(2);
+  if (timestamp.length() > 0)
+    return timestamp;
+
+  return String(ENTRY_TIMESTAMP_PLACEHOLDER);
+}
+
+String getEntryISO8601Time() {
+  String timestamp = getRtcISO8601Time();
+  if (timestamp.length() > 0)
+    return timestamp;
+
+  return getFallbackISO8601Time();
+}
+
+void appendTimestampedError(String error) {
+  if (properties.getErrorMax() == 0) {
+    Serial.println(error);
+    return;
+  }
+  if (static_cast<uint16_t>(errorLog.size()) >= properties.getErrorMax())
+    errorLog.pop_back();
+  errorLog.push_front(error);
+  Serial.println(error);
+}
+
+void recordRtcTimestampError(String error) {
+  // RTC acquisition generated this error, so retrying the RTC to timestamp it
+  // would recurse. PPS and the fixed placeholder are the remaining two steps
+  // of the normal entry timestamp selection.
+  appendTimestampedError(getFallbackISO8601Time() + " - " + error);
+}
+
+} // namespace
+
+String getGpsISO8601Time() {
+  return getPpsISO8601Time(6);
 }
 
 void addLog(String log) {
@@ -2843,26 +2995,15 @@ void addLog(String log) {
   if (static_cast<uint16_t>(usageLog.size()) >= properties.getLogMax()) {
     usageLog.pop_back();
   }
-  usageLog.push_front(getRtcISO8601Time() + " - " + log);
+  usageLog.push_front(getEntryISO8601Time() + " - " + log);
 }
 
 void addError(String error) {
-  const String rtcTimestamp = getRtcISO8601Time();
-  if (rtcTimestamp.length() > 0)
-    error = rtcTimestamp + " - " + error;
   recordError(error);
 }
 
 void recordError(String error) {
-  if (properties.getErrorMax() == 0) {
-    Serial.println(error);
-    return;
-  }
-  if (static_cast<uint16_t>(errorLog.size()) >= properties.getErrorMax()) {
-    errorLog.pop_back();
-  }
-  errorLog.push_front(error);
-  Serial.println(error);
+  appendTimestampedError(getEntryISO8601Time() + " - " + error);
 }
 
 // Display text on the OLED screen

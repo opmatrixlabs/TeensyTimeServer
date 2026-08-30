@@ -8,7 +8,9 @@ TeensyTimeServer is a self-contained, GNSS-based NTP hardware server for a local
 
 The design favors timing accuracy and unattended operation. NTP timestamps are derived from the captured TP1 edge and its validated `UBX-TIM-TP` UTC data instead of treating the arrival time of an I2C message as the exact start of a second.
 
-The code was written and built with Visual Studio 2026 with the Visual Micro Ardunio for Visual Studio extention.  However, you can use Arduino IDE 2.3 or greater to build the code.
+The code was written and built with Visual Studio 2026 with the Visual Micro Ardunio for Visual Studio extension.  However, you can use Arduino IDE 2.3 or greater to build the code.
+
+I started writing TeensyTimeServe in 2023 and slowly added features over the years.  This project was not vibe coded.  I did 99% of it myself.  However, in August 2026 I use ChatGPT 5.6 Sol to create test code to find some intermittent issues that were causing TeensyTimeServer to freeze and then fix them.  Also, I had ChatGPT create some of the text in this readme. 
 
 ## Components
 
@@ -60,7 +62,7 @@ Important details:
 - With `SEL` LOW, the DEV-20748 routes `RXI` to the Teensy MicroMod primary receive signal, which is Arduino digital pin `0` in this firmware.
 - TP1 is an actively driven 3.3 V signal. Use a high-impedance `INPUT` without a pull-up, level shifter, or 50-ohm termination.
 - Leave the ZED-F9T `TP1` routing jumper in its factory-closed state unless the TP1 SMA path is intentionally being isolated. The separate `TP1_LED` jumper may be opened to remove the time-pulse LED load.
-- Keep the TP1-to-RXI connection short and separated from Ethernet magnetics, switching power wiring, and other noisy conductors.
+- Keep the TP1-to-RXI connection short and separated from Ethernet magnets, switching power wiring, and other noisy conductors.
 
 The firmware configures TP1 as an enabled, UTC-aligned, GNSS-synchronized, rising-edge 1 Hz pulse and attaches an interrupt to Teensy pin `0`. The pulse marks the exact second boundary, while `UBX-TIM-TP` supplies the UTC data associated with that boundary; both must be valid before the pulse clock is used for synchronized NTP responses.
 
@@ -76,9 +78,13 @@ The ZED-F9T TP1 output is routed to RXI, captured on Teensy pin `0`, and associa
 
 The firmware supervises W5500 responsiveness, physical link state, DHCP maintenance, and the NTP and HTTP sockets, escalating failures through socket repair, service reconfiguration, bounded retries, hardware reset, and a final processor restart. This lets the appliance recover from cable, PHY, controller, DHCP, and socket glitches without routinely requiring a manual power cycle.
 
-### RTC on a separate Qwiic branch
+### Use of a RTC for logs
 
-The RV-1805 RTC is plugged into the DEV-20748's second Qwiic connector, giving it a separate physical cable path from the ZED-F9T and OLED even though both connectors use the same I2C controller. Keeping the RTC out of the GNSS/OLED daisy chain shortens and simplifies that timing-sensitive path, which can reduce cable capacitance and signal-integrity problems, but RTC transfers can still occupy the shared bus.
+The RV-1805 RTC is plugged into the DEV-20748's second Qwiic connector, and is used for log timestamps.  This allows accurate date-time on event and error logs even if the GNSS signal is not available.  If the RTC has an issue, the date-time on event and error logs will use the GNSS if available.
+
+### Passcode for setup changes
+
+Configuration changes and firmware uploads are protected form changes by a passcode. Users must enter the correct passcode before the server will accept and save protected changes.  There are two passcode.  One is the passcode setup by the user on the Setup page.  The other is a master override password in the Properties.h file. **Don't forget to change this for your build**.
 
 ### Alternating the OLED
 
