@@ -1,8 +1,8 @@
-# PPS Upgrade
+# PPS Connection
 
 ## Purpose
 
-Repair Plan 3 can use the ZED-F9T's precision time-pulse output to discipline the TeensyTimeServer clock. With the SparkFun MicroMod Main Board - Single v2.1 (DEV-20748), the pulse can reach the Teensy MicroMod without replacing the carrier or soldering directly to the processor module.
+Use the ZED-F9T's precision time-pulse output to control the TeensyTimeServer clock. With the SparkFun MicroMod Main Board - Single v2.1 (DEV-20748), the pulse can reach the Teensy MicroMod without replacing the carrier or soldering directly to the processor module.
 
 ## Recommended Wiring
 
@@ -56,17 +56,6 @@ attachInterrupt(digitalPinToInterrupt(PPS_PIN), ppsInterrupt, RISING);
 ```
 
 Use `INPUT`, not `INPUT_PULLUP`, because TP1 is actively driven. The interrupt handler should capture a hardware counter or timestamp and return immediately. It should not perform I2C transactions, logging, or NTP packet construction.
-
-## Recommended Proof Test
-
-Before changing the NTP timestamp calculations:
-
-1. Install the TP1, SEL, and ground wiring with power removed.
-2. Configure TP1 for a UTC-aligned, rising-edge 1 Hz pulse.
-3. Add a minimal temporary interrupt counter on Teensy pin `0`.
-4. Verify that exactly one rising-edge interrupt is received per second.
-5. Confirm that Ethernet, GNSS communication, RTC operation, OLED operation, and the HTTP interface continue to work.
-6. Only after the hardware path is verified, use the captured PPS edge to discipline the local timebase and NTP timestamps.
 
 The carrier's UART multiplexer and wiring add a small, mostly fixed propagation delay. This is far smaller and more repeatable than the timing uncertainty from polling the GNSS over I2C. It can be measured and compensated later if absolute sub-microsecond calibration is required.
 

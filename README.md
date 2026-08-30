@@ -1,14 +1,14 @@
 # TeensyTimeServer
 
-TeensyTimeServer is a self-contained, GNSS-based NTP hardware server for a local Ethernet network. A SparkFun ZED-F9T supplies UTC and a precision 1 Hz time pulse, the Teensy MicroMod maintains a pulse-anchored local clock, and the W5500 serves NTP on UDP port 123 while the web interface provides status, configuration, logs, RTC controls, and firmware updates on TCP port 80.
+<p align="center">
+  <img src="images/assembly.jpg" alt="TeensyTimeServer internal assembly with the MicroMod Main Board, W5500, ZED-F9T, OLED, and RTC" width="520">
+</p>
+
+TeensyTimeServer is a self-contained, GNSS-based NTP hardware server for a local Ethernet network. A SparkFun ZED-F9T supplies UTC and a precision 1 Hz time pulse, the Teensy MicroMod maintains a pulse-anchored local clock, and the W5500 serves NTP on UDP port 123 while the web interface provides status, configuration, logs, RTC controls, and firmware updates on TCP port 80 (HTTP).
 
 The design favors timing accuracy and unattended operation. NTP timestamps are derived from the captured TP1 edge and its validated `UBX-TIM-TP` UTC data instead of treating the arrival time of an I2C message as the exact start of a second.
 
 The code was written and built with Visual Studio 2026 with the Visual Micro Ardunio for Visual Studio extention.  However, you can use Arduino IDE 2.3 or greater to build the code.
-
-<p align="center">
-  <img src="images/running.jpg" alt="TeensyTimeServer running in its enclosure with the OLED showing GNSS and network status" width="520">
-</p>
 
 ## Components
 
@@ -21,6 +21,7 @@ The code was written and built with Visual Studio 2026 with the Visual Micro Ard
 7. Adafruit LTC4311 I2C Extender / Active Terminator (Qwiic), installed between the ZED-F9T and the MicroMod Main Board
 8. GNSS All-Band High Precision Antenna - 5 m (SMA)
 9. Sixfab Outdoor IP65 Project Enclosure, 4.9 x 8.3 x 2.3 inches
+10. Geekworm M2.5 Hex Brass Spacer/Standoffs Screws Nuts 
 
 Qwiic cables, a short insulated wire for TP1, a short ground wire, mounting hardware, Ethernet cabling, and a suitable PoE or USB power source are also required.
 
@@ -29,28 +30,26 @@ Qwiic cables, a short insulated wire for TP1, a short ground wire, mounting hard
 - Install the Teensy Processor in the MicroMod processor socket and the W5500 in the Function Board socket before applying power.
 - Connect the ZED-F9T and OLED through one physical Qwiic path. Place the LTC4311 inline in that path between the DEV-20748 and the ZED-F9T.
 - Plug the RV-1805 RTC into the DEV-20748's second Qwiic connector so it uses a separate physical branch instead of being daisy-chained through the GNSS/OLED path.
-- Connect the all-band antenna to the ZED-F9T antenna SMA connector and position the antenna where it has a clear view of the sky.
+- Connect the all-band antenna to the ZED-F9T antenna SMA connector and position the antenna where it has a clear view of the sky.  (*The antenna will receive signals through windows and most non-metal roofing materials.*)
 - Maintain a common ground among the Main Board, ZED-F9T, RTC, OLED, and any external power hardware.
 
 The two standard Qwiic connectors provide separate cable paths but are electrically connected to the same primary I2C controller and SDA/SCL bus. The RTC therefore avoids the physical GNSS/OLED daisy chain.
-
-<p align="center">
-  <img src="images/assembly.jpg" alt="TeensyTimeServer internal assembly with the MicroMod Main Board, W5500, ZED-F9T, OLED, and RTC" width="520">
-</p>
 
 ## Connecting the GNSS Time Pulse
 
 Power down the complete assembly before soldering or changing these connections.
 
-| From | To | Purpose |
-| --- | --- | --- |
-| ZED-F9T `TP1` PTH | DEV-20748 `RXI` PTH | Routes the 1 Hz time pulse to the Teensy input |
+| From                | To                  | Purpose                                                               |
+| ------------------- | ------------------- | --------------------------------------------------------------------- |
+| ZED-F9T `TP1` PTH   | DEV-20748 `RXI` PTH | Routes the 1 Hz time pulse to the Teensy input                        |
 | DEV-20748 `SEL` PTH | DEV-20748 `GND` PTH | Holds the Main Board UART selector LOW so `RXI` reaches the processor |
-| ZED-F9T `GND` | DEV-20748 `GND` | Provides a short return path for the TP1 signal |
+| ZED-F9T `GND`       | DEV-20748 `GND`     | Provides a short return path for the TP1 signal                       |
 
-| ZED-F9T TP1 and ground | DEV-20748 RXI, SEL, and ground |
-| --- | --- |
-| ![ZED-F9T TP1 and ground connection points](images/time-pulse-pin-and-ground.jpg) | ![DEV-20748 RXI, SEL, and ground connection points](images/rxi-pin-selc-pin-and-ground.jpg) |
+The wires are running on the underside of the boards and are twisted together to minimize interference.  The pictures depict the soldering points with the wires on the backside.
+
+| ZED-F9T TP1 and ground                                                            | DEV-20748 RXI, SEL, and ground                                                              |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| ![ZED-F9T TP1 and ground connection points](images/time-pulse-pin-and-ground.jpg) | ![DEV-20748 RXI, SEL, and ground connection points](images/rxi-pin-sel-pin-and-ground.jpg) |
 
 The Qwiic cable already provides a common ground, but a short ground conductor routed beside the TP1 wire is recommended for better signal integrity. A short signal-and-ground twisted pair is preferable.
 
@@ -133,6 +132,11 @@ After assembly or a firmware update, verify the following:
 - [SparkFun GNSS Timing Breakout - ZED-F9T Hookup Guide](https://learn.sparkfun.com/tutorials/gnss-timing-breakout---zed-f9t-qwiic-hookup-guide/all)
 
 ## Software References
+
 - [Microsoft Visual Studio 2026 Community Edition](https://visualstudio.microsoft.com/vs/community/)
 - [Visual Micro Arduino IDE for Visual Studio](https://www.visualmicro.com/)
 - [Arduino IDE 2.3.x](https://www.arduino.cc/en/software/)
+
+<p align="center">
+  <img src="images/running.jpg" alt="TeensyTimeServer running in its enclosure with the OLED showing GNSS and network status" width="520">
+</p>

@@ -8,6 +8,11 @@ obj/
 # Other IDE-local state
 .idea/
 
+# Any agent file
+AGENTS.md
+CLAUDE.md
+PROJECT.md
+
 # Firmware build products
 *.elf
 *.hex
