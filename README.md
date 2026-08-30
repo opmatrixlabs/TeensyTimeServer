@@ -23,7 +23,7 @@ The code was written and built with Visual Studio 2026 with the Visual Micro Ard
 9. Sixfab Outdoor IP65 Project Enclosure, 4.9 x 8.3 x 2.3 inches
 10. Geekworm M2.5 Hex Brass Spacer/Standoffs Screws Nuts 
 
-Qwiic cables, a short insulated wire for TP1, a short ground wire, mounting hardware, Ethernet cabling, and a suitable PoE or USB power source are also required.
+Qwiic cables, a short insulated wire for TP1, a short ground wire, mounting hardwarel, Ethernet cabling, and a suitable PoE or USB power source are also required.
 
 ## Hardware Layout
 
@@ -62,7 +62,7 @@ Important details:
 - Leave the ZED-F9T `TP1` routing jumper in its factory-closed state unless the TP1 SMA path is intentionally being isolated. The separate `TP1_LED` jumper may be opened to remove the time-pulse LED load.
 - Keep the TP1-to-RXI connection short and separated from Ethernet magnetics, switching power wiring, and other noisy conductors.
 
-The firmware configures TP1 as an enabled, UTC-aligned, GNSS-synchronized, rising-edge 1 Hz pulse and attaches an interrupt to Teensy pin `0`. The pulse marks the exact second boundary, while `UBX-TIM-TP` supplies the UTC label associated with that boundary; both must be valid before the pulse clock is used for synchronized NTP responses.
+The firmware configures TP1 as an enabled, UTC-aligned, GNSS-synchronized, rising-edge 1 Hz pulse and attaches an interrupt to Teensy pin `0`. The pulse marks the exact second boundary, while `UBX-TIM-TP` supplies the UTC data associated with that boundary; both must be valid before the pulse clock is used for synchronized NTP responses.
 
 See [PPS_Upgrade.md](PPS_Upgrade.md) for additional background and signal-routing notes.
 

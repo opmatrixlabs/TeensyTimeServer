@@ -17,3 +17,7 @@ PROJECT.md
 *.elf
 *.hex
 *.map
+
+# Testing outputs
+*.pcapng
+*.pcap
