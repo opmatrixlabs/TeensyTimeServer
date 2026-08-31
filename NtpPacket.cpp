@@ -34,6 +34,7 @@ constexpr uint8_t NTP_PRECISION_MINUS_9 = 0xF7;
 constexpr uint8_t NTP_ROOT_DISPERSION_LOW_BYTE = 0x50;
 }
 
+// Validates an NTP request's length, client mode, and protocol version.
 NtpResponseStatus validateNtpRequest(const uint8_t* request, const std::size_t requestLength) {
   if (request == nullptr || requestLength != NTP_PACKET_SIZE)
     return NtpResponseStatus::InvalidLength;
@@ -49,6 +50,7 @@ NtpResponseStatus validateNtpRequest(const uint8_t* request, const std::size_t r
   return NtpResponseStatus::Ready;
 }
 
+// Builds a synchronized or explicitly unsynchronized NTP response for a valid client request.
 NtpResponseStatus createNtpResponse(const uint8_t* request,
                                     const std::size_t requestLength,
                                     const NormalizedTimestamp& referenceTime,

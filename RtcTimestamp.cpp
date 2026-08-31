@@ -15,6 +15,7 @@ constexpr uint8_t DATE_INDEX = 4;
 constexpr uint8_t MONTH_INDEX = 5;
 constexpr uint8_t YEAR_INDEX = 6;
 
+// Decodes a packed-BCD byte and verifies that the result lies within the requested range.
 bool decodeBcdInRange(const uint8_t raw,
                       const uint8_t minimum,
                       const uint8_t maximum,
@@ -35,10 +36,12 @@ bool decodeBcdInRange(const uint8_t raw,
   return true;
 }
 
+// Reports whether a Gregorian calendar year contains a leap day.
 bool isLeapYear(const uint16_t year) {
   return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 }
 
+// Returns the number of days in a Gregorian month for the supplied year.
 uint8_t daysInMonth(const uint8_t month, const uint16_t year) {
   switch (month) {
     case 1: case 3: case 5: case 7: case 8: case 10: case 12:
@@ -54,6 +57,7 @@ uint8_t daysInMonth(const uint8_t month, const uint16_t year) {
 
 } // namespace
 
+// Decodes and validates the RV-1805 timestamp registers into a calendar date and time.
 bool decodeRv1805Timestamp(const uint8_t* registers,
                            const std::size_t registerCount,
                            RtcDateTime* timestamp) {

@@ -25,6 +25,7 @@
 #include <string.h>
 
 namespace {
+// Verifies conversion from status refresh frequency to the corresponding NAV-PVT epoch rate.
 void testStatusFrequencyConversion() {
   assert(navPvtEpochRateForStatusFrequency(0) == 1);
   assert(navPvtEpochRateForStatusFrequency(1) == 1);
@@ -38,6 +39,7 @@ void testStatusFrequencyConversion() {
   assert(navPvtEpochRateForStatusFrequency(200000) == MAX_NAV_PVT_EPOCH_RATE);
 }
 
+// Verifies calculation of NAV-PVT reporting periods and GNSS status freshness limits.
 void testReportAndFreshnessPeriods() {
   assert(navPvtReportPeriodMillis(0) == 1000);
   assert(navPvtReportPeriodMillis(60) == 60000);
@@ -45,6 +47,7 @@ void testReportAndFreshnessPeriods() {
   assert(gnssStatusFreshnessLimitMillis(60) == 121000);
 }
 
+// Verifies that GNSS status snapshots can be stored, retrieved, aged, and cleared correctly.
 void testSnapshotAndFreshness() {
   GnssStatusCache cache;
   GnssStatusSnapshot snapshot = {};
@@ -71,6 +74,7 @@ void testSnapshotAndFreshness() {
   assert(!cache.get(&restored));
 }
 
+// Verifies GNSS status freshness calculations across the millisecond counter rollover.
 void testMillisRolloverFreshness() {
   GnssStatusCache cache;
   GnssStatusSnapshot snapshot = {};
@@ -80,6 +84,7 @@ void testMillisRolloverFreshness() {
   assert(!cache.isFresh(0x00000011UL, 32));
 }
 
+// Verifies the human-readable names assigned to every supported GNSS fix type.
 void testFixNames() {
   assert(strcmp(gnssFixTypeName(false, 3), "No Fix") == 0);
   assert(strcmp(gnssFixTypeName(true, 0), "No Fix") == 0);
@@ -92,6 +97,7 @@ void testFixNames() {
 }
 }
 
+// Runs all GNSS status unit tests and reports success through the process exit code.
 int main() {
   testStatusFrequencyConversion();
   testReportAndFreshnessPeriods();

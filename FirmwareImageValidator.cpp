@@ -20,6 +20,7 @@ constexpr uint32_t CSF_SIZE = 0xC00UL;
 constexpr char TARGET_MARKER[] = "fw_teensyMM";
 constexpr char APPLICATION_MARKER[] = "TeensyTimeServerFirmware";
 
+// Reads a little-endian 32-bit word from the firmware image.
 uint32_t readWord(const volatile uint8_t* image, const uint32_t offset) {
   return static_cast<uint32_t>(image[offset]) |
          (static_cast<uint32_t>(image[offset + 1]) << 8) |
@@ -27,6 +28,7 @@ uint32_t readWord(const volatile uint8_t* image, const uint32_t offset) {
          (static_cast<uint32_t>(image[offset + 3]) << 24);
 }
 
+// Reports whether the firmware image contains the specified identity marker.
 bool containsMarker(const volatile uint8_t* image,
                     const uint32_t imageSize,
                     const char* marker,
@@ -43,12 +45,14 @@ bool containsMarker(const volatile uint8_t* image,
   return false;
 }
 
+// Creates a failed firmware-image validation result with the supplied error message.
 FirmwareImageValidation invalid(const char* error) {
   return { false, error };
 }
 
 } // namespace
 
+// Validates that an uploaded image is a structurally sound TeensyTimeServer firmware build.
 FirmwareImageValidation validateTeensyTimeServerImage(const volatile uint8_t* image,
                                                       const uint32_t imageSize) {
   if (image == nullptr || imageSize < MINIMUM_IMAGE_SIZE || imageSize > MAXIMUM_IMAGE_SIZE)

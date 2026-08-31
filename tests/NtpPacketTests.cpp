@@ -25,6 +25,7 @@
 #include <string.h>
 
 namespace {
+// Initializes an NTP client request with the specified version, poll interval, and transmit timestamp pattern.
 void initializeRequest(uint8_t* request, const uint8_t version, const uint8_t poll) {
   memset(request, 0, NTP_PACKET_SIZE);
   request[0] = static_cast<uint8_t>(0xC0 | (version << 3) | 3); // Client LI must not be copied to the response.
@@ -33,11 +34,13 @@ void initializeRequest(uint8_t* request, const uint8_t version, const uint8_t po
     request[40 + i] = static_cast<uint8_t>(0xA0 + i);
 }
 
+// Verifies that two byte sequences contain identical values over the requested length.
 void assertBytesEqual(const uint8_t* actual, const uint8_t* expected, const size_t length) {
   for (size_t i = 0; i < length; ++i)
     assert(actual[i] == expected[i]);
 }
 
+// Verifies that synchronized responses preserve request metadata and encode all timestamps correctly.
 void testVersionPollOriginAndTimestamps() {
   const NormalizedTimestamp referenceTime = normalizeTimestamp(0x21222324LL, 125000000);
   const NormalizedTimestamp receiveTime = normalizeTimestamp(0x01020304LL, 500000000);
@@ -81,6 +84,7 @@ void testVersionPollOriginAndTimestamps() {
   }
 }
 
+// Verifies that malformed NTP requests are rejected without modifying the response buffer.
 void testInvalidRequestsDoNotModifyResponse() {
   uint8_t request[NTP_PACKET_SIZE] = {};
   initializeRequest(request, 4, 6);
@@ -116,6 +120,7 @@ void testInvalidRequestsDoNotModifyResponse() {
     assert(response[i] == 0xA5);
 }
 
+// Verifies that unsynchronized responses advertise the correct status and omit unavailable timestamps.
 void testUnsynchronizedResponse() {
   uint8_t request[NTP_PACKET_SIZE] = {};
   initializeRequest(request, 4, 0xFA);
@@ -136,6 +141,7 @@ void testUnsynchronizedResponse() {
     assert(response[i] == 0);
 }
 
+// Verifies that an undersized output buffer is rejected without changing its contents.
 void testSmallOutputBufferDoesNotModifyResponse() {
   uint8_t request[NTP_PACKET_SIZE] = {};
   initializeRequest(request, 4, 6);
@@ -158,6 +164,7 @@ void testSmallOutputBufferDoesNotModifyResponse() {
 }
 }
 
+// Runs all NTP packet unit tests and reports success through the process exit code.
 int main() {
   testVersionPollOriginAndTimestamps();
   testInvalidRequestsDoNotModifyResponse();

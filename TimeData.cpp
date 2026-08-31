@@ -21,9 +21,11 @@
 
 #include "TimeData.h"
 
+// Constructs a TimeData object with its default field values.
 TimeData::TimeData() 
 = default;
 
+// Constructs a TimeData object from the supplied calendar time and nanoseconds.
 TimeData::TimeData(uint16_t y, uint8_t m, uint8_t d, uint8_t h, uint8_t min, uint8_t s, int32_t ss) {
 	setYear(y);
   setMonth(m);
@@ -34,80 +36,96 @@ TimeData::TimeData(uint16_t y, uint8_t m, uint8_t d, uint8_t h, uint8_t min, uin
   setSubSec(ss);
 }
 
+// Destroys the TimeData object.
 TimeData::~TimeData()
 = default;
 
-// Set the number of leap seconds since January 6 1980 from GPS (UBX-NAV-TIMELS)
+// Sets the total leap-second count from a GPS-era leap-second value.
 void TimeData::setLeapSecondsSince1980(int8_t gpsLeapSeconds) {
 	totalLeapSeconds_ = gpsLeapSeconds + LEAP_SECONDS_1980;
 }
 
-// Set the number of leap seconds since January 6, 2026
+// Sets the total leap-second count to the configured 2025-era value.
 void TimeData::setLeapSecondsSince2025() {
   totalLeapSeconds_ = LEAP_SECONDS_2025;
 }
 
-// Set the number of leap seconds since January 1, 1900
+// Returns the total number of leap seconds since 1900.
 int8_t TimeData::getTotalLeapSeconds() {
 	return totalLeapSeconds_;
 }
 
+// Sets the year when the supplied value is valid.
 void TimeData::setYear(uint16_t y) {
   if (y > 0) year_ = y;
 }
 
+// Sets the month when the supplied value is valid.
 void TimeData::setMonth(uint8_t m) {
   if (m > 0 && m <= 12) month_ = m;
 }
 
+// Sets the day when it is valid for the current month and year.
 void TimeData::setDay(uint8_t d) {
   if (d > 0 && d <= daysInMonth(month_, year_)) day_ = d;
 }
 
+// Sets the hour when the supplied value is valid.
 void TimeData::setHour(uint8_t h) {
   if (h >= 0 && h < 24) hour_ = h;
 }
 
+// Sets the minute when the supplied value is valid.
 void TimeData::setMin(uint8_t m) {
   if (m >= 0 && m < 60) min_ = m;
 }
 
+// Sets the second when the supplied value is valid.
 void TimeData::setSec(uint8_t s) {
   if (s >= 0 && s < 60) sec_ = s;
 }
 
+// Sets the nanosecond fraction when the supplied value is nonnegative.
 void TimeData::setSubSec(int32_t ss) {
   if (ss >= 0) subSec_ = ss;
 }
 
+// Returns the stored year.
 uint16_t TimeData::getYear() {
   return year_;
 }
 
+// Returns the stored month.
 uint8_t TimeData::getMonth() {
   return month_;
 }
 
+// Returns the stored day of the month.
 uint8_t TimeData::getDay() {
   return day_;
 }
 
+// Returns the stored hour.
 uint8_t TimeData::getHour() {
   return hour_;
 }
 
+// Returns the stored minute.
 uint8_t TimeData::getMin() {
   return min_;
 }
 
+// Returns the stored second.
 uint8_t TimeData::getSec() {
   return sec_;
 }
 
+// Returns the stored nanosecond fraction.
 int32_t TimeData::getSubSec() {
   return subSec_;
 }
 
+// Formats the stored time as an ISO 8601 timestamp at the requested precision.
 String TimeData::getISO8601Time(uint8_t decimalPrecision) {
   char strISO8601Time[64] = {0};
   char strNanoseconds[10] = {0};
@@ -122,6 +140,7 @@ String TimeData::getISO8601Time(uint8_t decimalPrecision) {
   return String(strISO8601Time);
 }
 
+// Formats the supplied calendar fields as an ISO 8601 timestamp.
 String TimeData::toISO8601Time(uint16_t y, uint8_t m, uint8_t d, uint8_t h, uint8_t min, uint8_t s, int32_t ss, uint8_t decimalPrecision) {
   char strISO8601Time[64] = {0};
   String strDecimal = String(ss);
@@ -140,6 +159,7 @@ String TimeData::toISO8601Time(uint16_t y, uint8_t m, uint8_t d, uint8_t h, uint
   return String(strISO8601Time);
 }
 
+// Applies a nanosecond correction and carries a negative correction into the prior second.
 void TimeData::calculateCorrectedTime(const int32_t nanoCorrection) {
     if (nanoCorrection < 0) {
         subSec_ = 1000000000 + nanoCorrection; // adding a negative value to nanos in a second
@@ -182,10 +202,12 @@ void TimeData::calculateCorrectedTime(const int32_t nanoCorrection) {
     }
 }
 
+// Reports whether the supplied year is a Gregorian leap year.
 bool TimeData::isLeapYear(const uint16_t year) {
     return ((year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0)));
 }
 
+// Returns the number of days in the supplied month and year.
 uint8_t TimeData::daysInMonth(const uint8_t month, const uint16_t year) {
     uint8_t daysInMonth = 0;
     switch (month) {
@@ -207,6 +229,7 @@ uint8_t TimeData::daysInMonth(const uint8_t month, const uint16_t year) {
     return daysInMonth;
 }
 
+// Converts the stored calendar time into whole seconds since 1900-01-01.
 uint64_t TimeData::secondsSince1900() {
      // Calculate total days since 1900-01-01
     int32_t year = year_;
@@ -233,6 +256,7 @@ uint64_t TimeData::secondsSince1900() {
     return seconds;
 }
 
+// Populates the stored calendar fields from whole seconds since 1900-01-01.
 bool TimeData::setSecondsSince1900(uint64_t seconds) {
   uint64_t days = seconds / 86400ULL;
   uint32_t secondsOfDay = static_cast<uint32_t>(seconds % 86400ULL);
@@ -272,10 +296,12 @@ bool TimeData::setSecondsSince1900(uint64_t seconds) {
   return true;
 }
 
+// Records whether the stored GPS time is valid.
 void TimeData::validGpsTime(bool valid) {
   isValidGpsTime_ = valid;
 }
 
+// Reports whether the stored GPS time is valid.
 bool TimeData::isValidGpsTime() {
   return isValidGpsTime_;
 }

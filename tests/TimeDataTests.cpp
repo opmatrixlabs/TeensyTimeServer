@@ -25,10 +25,12 @@
 #include <string>
 
 namespace {
+// Confirms that an Arduino String exactly matches the expected text.
 void assertStringEquals(const String& actual, const char* expected) {
   assert(std::string(actual.c_str()) == expected);
 }
 
+// Verifies that nanosecond values retain their full nine-digit scale during formatting.
 void testNanosecondsRetainTheirNineDigitScale() {
   TimeData time(2026, 8, 26, 12, 34, 56, 30000000);
   assertStringEquals(time.getISO8601Time(6), "2026-08-26T12:34:56.030000");
@@ -49,6 +51,7 @@ void testNanosecondsRetainTheirNineDigitScale() {
   assertStringEquals(time.getISO8601Time(9), "2026-08-26T12:34:56.999999999");
 }
 
+// Verifies that RTC hundredths are formatted without changing their two-digit meaning.
 void testRtcHundredthsFormattingIsUnchanged() {
   assertStringEquals(TimeData::toISO8601Time(2026, 8, 26, 12, 34, 56, 3, 2),
                      "2026-08-26T12:34:56.03");
@@ -56,6 +59,7 @@ void testRtcHundredthsFormattingIsUnchanged() {
                      "2026-08-26T12:34:56.30");
 }
 
+// Verifies that PPS log timestamps use exactly two fractional digits.
 void testPpsLogPrecisionUsesTwoDigits() {
   TimeData time(2026, 8, 30, 18, 20, 55, 123456789);
   assertStringEquals(time.getISO8601Time(2), "2026-08-30T18:20:55.12");
@@ -64,6 +68,7 @@ void testPpsLogPrecisionUsesTwoDigits() {
   assertStringEquals(time.getISO8601Time(2), "2026-08-30T18:20:55.00");
 }
 
+// Verifies that representative calendar times survive conversion to and from seconds since 1900.
 void testSecondsSince1900RoundTrip() {
   const TimeData samples[] = {
       TimeData(1900, 1, 1, 0, 0, 0, 0),
@@ -83,6 +88,7 @@ void testSecondsSince1900RoundTrip() {
 }
 }
 
+// Runs all TimeData unit tests and reports success through the process exit code.
 int main() {
   testNanosecondsRetainTheirNineDigitScale();
   testRtcHundredthsFormattingIsUnchanged();

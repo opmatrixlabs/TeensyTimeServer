@@ -26,6 +26,7 @@ constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000LL;
 constexpr uint64_t NTP_FRACTION_SCALE = 1ULL << 32;
 }
 
+// Normalizes an NTP-era second and nanosecond pair into a canonical timestamp.
 NormalizedTimestamp normalizeTimestamp(const int64_t secondsSince1900, const int64_t nanoseconds) {
   NormalizedTimestamp timestamp = {};
   timestamp.secondsSince1900 = secondsSince1900 + nanoseconds / NANOSECONDS_PER_SECOND;
@@ -40,6 +41,7 @@ NormalizedTimestamp normalizeTimestamp(const int64_t secondsSince1900, const int
   return timestamp;
 }
 
+// Converts a normalized timestamp to the NTP wire-format seconds and fractional fields.
 NtpTimestamp toNtpTimestamp(const NormalizedTimestamp& timestamp) {
   NtpTimestamp ntpTimestamp = {};
   ntpTimestamp.seconds = static_cast<uint32_t>(timestamp.secondsSince1900);
@@ -48,6 +50,7 @@ NtpTimestamp toNtpTimestamp(const NormalizedTimestamp& timestamp) {
   return ntpTimestamp;
 }
 
+// Writes a 32-bit unsigned value to a buffer in network byte order.
 void writeUint32BigEndian(uint8_t* destination, const uint32_t value) {
   destination[0] = static_cast<uint8_t>((value >> 24) & 0xFF);
   destination[1] = static_cast<uint8_t>((value >> 16) & 0xFF);
@@ -55,6 +58,7 @@ void writeUint32BigEndian(uint8_t* destination, const uint32_t value) {
   destination[3] = static_cast<uint8_t>(value & 0xFF);
 }
 
+// Serializes an NTP timestamp into its eight-byte network representation.
 void writeNtpTimestamp(uint8_t* destination, const NtpTimestamp& timestamp) {
   writeUint32BigEndian(destination, timestamp.seconds);
   writeUint32BigEndian(destination + 4, timestamp.fraction);

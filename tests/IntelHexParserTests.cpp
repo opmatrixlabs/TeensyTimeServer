@@ -10,6 +10,7 @@
 
 namespace {
 
+// Feeds a text fragment into the parser and returns the most significant resulting parse state.
 IntelHexParseResult feed(IntelHexParser& parser, const char* text, IntelHexRecord* record) {
   IntelHexParseResult result = IntelHexParseResult::NeedMoreData;
   bool recordReady = false;
@@ -23,6 +24,7 @@ IntelHexParseResult feed(IntelHexParser& parser, const char* text, IntelHexRecor
   return recordReady ? IntelHexParseResult::RecordReady : result;
 }
 
+// Verifies parsing of valid Intel HEX records terminated by either CRLF or LF.
 void testValidRecordsAndCrLf() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -41,6 +43,7 @@ void testValidRecordsAndCrLf() {
   assert(parser.finish(&record) == IntelHexParseResult::NeedMoreData);
 }
 
+// Verifies that the parser accepts a complete final record without a trailing newline.
 void testFinalRecordWithoutNewline() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -49,6 +52,7 @@ void testFinalRecordWithoutNewline() {
   assert(record.type == 1 && parser.sawEndOfFile());
 }
 
+// Verifies that a record with an invalid checksum is rejected with an explanatory error.
 void testInvalidChecksum() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -56,6 +60,7 @@ void testInvalidChecksum() {
   assert(strstr(parser.error(), "checksum") != nullptr);
 }
 
+// Verifies rejection of records with mismatched lengths or non-hexadecimal characters.
 void testMismatchedLengthAndNonHexDigit() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -66,6 +71,7 @@ void testMismatchedLengthAndNonHexDigit() {
   assert(strstr(parser.error(), "non-hexadecimal") != nullptr);
 }
 
+// Verifies detection of a missing end-of-file record and data received after that record.
 void testMissingEofAndDataAfterEof() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -78,6 +84,7 @@ void testMissingEofAndDataAfterEof() {
   assert(parser.consume(':', &record) == IntelHexParseResult::Error);
 }
 
+// Verifies that an Intel HEX record exceeding the parser limit is rejected.
 void testOversizedRecord() {
   IntelHexParser parser;
   IntelHexRecord record = {};
@@ -90,6 +97,7 @@ void testOversizedRecord() {
 
 } // namespace
 
+// Runs all Intel HEX parser unit tests and reports success through the process exit code.
 int main() {
   testValidRecordsAndCrLf();
   testFinalRecordWithoutNewline();

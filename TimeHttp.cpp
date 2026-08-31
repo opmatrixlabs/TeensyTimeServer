@@ -35,12 +35,14 @@ enum class HeaderLookup : uint8_t {
   Duplicate
 };
 
+// Converts an ASCII letter to lowercase while leaving other characters unchanged.
 char lowerAscii(const char value) {
   if (value >= 'A' && value <= 'Z')
     return static_cast<char>(value + ('a' - 'A'));
   return value;
 }
 
+// Compares an Arduino String with a C string without ASCII case sensitivity.
 bool textEqualsIgnoreCase(const String& value, const char* expected) {
   if (expected == nullptr)
     return false;
@@ -56,6 +58,7 @@ bool textEqualsIgnoreCase(const String& value, const char* expected) {
   return true;
 }
 
+// Reports whether the first HTTP request line exactly matches the expected text.
 bool requestLineMatches(const String& headers, const char* expected) {
   int end = headers.indexOf('\n');
   if (end < 0)
@@ -65,6 +68,7 @@ bool requestLineMatches(const String& headers, const char* expected) {
   return headers.substring(0, end) == expected;
 }
 
+// Finds one case-insensitive HTTP header and distinguishes missing and duplicate fields.
 HeaderLookup findHeaderValueIgnoreCase(const String& headers, const char* name, String* value) {
   if (name == nullptr || value == nullptr)
     return HeaderLookup::Missing;
@@ -114,6 +118,7 @@ HeaderLookup findHeaderValueIgnoreCase(const String& headers, const char* name, 
   return found ? HeaderLookup::Found : HeaderLookup::Missing;
 }
 
+// Parses a nonempty decimal string into a 32-bit unsigned integer without accepting extra characters.
 bool parseUint32Strict(const String& value, uint32_t* parsed) {
   if (parsed == nullptr || value.length() == 0)
     return false;
@@ -130,6 +135,7 @@ bool parseUint32Strict(const String& value, uint32_t* parsed) {
   return true;
 }
 
+// Compares an HTTP media type while ignoring parameters, surrounding whitespace, and ASCII case.
 bool mediaTypeEquals(const String& value, const char* expected) {
   int end = value.indexOf(';');
   if (end < 0)
@@ -142,6 +148,7 @@ bool mediaTypeEquals(const String& value, const char* expected) {
   return textEqualsIgnoreCase(value.substring(start, end), expected);
 }
 
+// Validates that a reasonably sized filename ends with a case-insensitive .hex extension.
 bool hasHexFileExtension(const String& fileName) {
   if (fileName.length() < 5 || fileName.length() > 128)
     return false;
@@ -152,12 +159,15 @@ bool hasHexFileExtension(const String& fileName) {
 
 } // namespace
 
+// Constructs a TimeHttp object with its default member state.
 TimeHttp::TimeHttp() 
 = default;
 
+// Destroys a TimeHttp object.
 TimeHttp::~TimeHttp()
 = default;
 
+// Requests an immediate Teensy system reset and waits for the processor to restart.
 void TimeHttp::restartTeensy() {
     SCB_AIRCR = 0x05FA0004;  // Write the reset value directly
     while (true) {
@@ -165,125 +175,152 @@ void TimeHttp::restartTeensy() {
     }
 }
 
+// Stores the Ethernet client used for the current HTTP response.
 void TimeHttp::setHttpClient(EthernetClient* client) {
   pHttpClient_ = client;
 }
 
+// Returns the Ethernet client assigned to the HTTP handler.
 EthernetClient* TimeHttp::getHttpClient() {
   return pHttpClient_;
 }
 
+// Stores the application name displayed on generated pages.
 void TimeHttp::setAppName(const String appName) {
   appName_ = appName;
 }
 
+// Returns the application name displayed on generated pages.
 String TimeHttp::getAppName() {
   return appName_;
 }
 
+// Stores the settings object used to read and update server configuration.
 void TimeHttp::setProperties(Properties* properties) {
   pProperties_ = properties;
 }
 
+// Returns the settings object used by the HTTP handler.
 Properties* TimeHttp::getProperties() {
   return pProperties_;
 }
 
+// Stores the local IP address shown by the web interface.
 void TimeHttp::setLocalIp(String localIp) {
   localIp_ = localIp;
 }
 
+// Stores the current GNSS fix description shown by the web interface.
 void TimeHttp::setGpsFixType(String gpsFixType) {
   gpsFixType_ = gpsFixType;
 }
 
+// Stores the current GNSS time string shown by the web interface.
 void TimeHttp::setGpsISO8601Time(String gpsISO8601Time) {
   gpsISO8601Time_ = gpsISO8601Time;
 }
 
+// Returns the local IP address shown by the web interface.
 String TimeHttp::getLocalIp() {
   return localIp_;
 }
 
+// Returns the current GNSS fix description.
 String TimeHttp::getGpsFixType() {
   return gpsFixType_;
 }
 
+// Returns the stored GNSS ISO 8601 time string.
 String TimeHttp::getGpsISO8601Time() {
   return gpsISO8601Time_;
 }
 
+// Stores the current RTC time string shown by the web interface.
 void TimeHttp::setRtcISO8601Time(String rtcISO8601Time) {
   rtcISO8601Time_ = rtcISO8601Time;
 }
 
+// Returns the stored RTC ISO 8601 time string.
 String TimeHttp::getRtcISO8601Time() {
   return rtcISO8601Time_;
 }
 
+// Stores the string buffer containing the generated server configuration.
 void TimeHttp::setConfigString(String* config) {
   pConfig_ = config;
 }
 
+// Returns the string buffer containing the generated server configuration.
 String* TimeHttp::getConfigString() {
   return pConfig_;
 }
 
+// Registers the callback that refreshes the generated server configuration.
 void TimeHttp::setConfigFunction(void (*fptrGetGpsConfig)()) {
     fptrGetGpsConfig_ = fptrGetGpsConfig;
 }
 
+// Registers the callback that supplies the current GNSS time.
 void TimeHttp::setGpsTimeFunction(String (*fptrGetGpsTime)()) {
   fptrGetGpsTime_ = fptrGetGpsTime;
 }
 
+// Registers the callback that supplies the current RTC time.
 void TimeHttp::setRtcTimeFunction(String (*fptrGetRtcTime)()) {
   fptrGetRtcTime_ = fptrGetRtcTime;
 }
 
+// Registers the callback that requests an RTC synchronization.
 void TimeHttp::setUpdateRtcFunction(void (*fptrUpdateRtc)()) {
     fptrUpdateRtc_ = fptrUpdateRtc;
 }
 
+// Registers the callback used to append a usage-log entry.
 void TimeHttp::setAddLogFunction(void (*fptrAddLog)(String log)) {
     fptrAddLog_ = fptrAddLog;
 }
 
+// Registers the callback used to append an error-log entry.
 void TimeHttp::setAddErrorFunction(void (*fptrAddError)(String error)) {
     fptrAddError_ = fptrAddError;
 }
 
+// Stores the usage-log collection rendered by the web interface.
 void TimeHttp::setLogArray(std::list<String>* usageLog) {
   pUsageLog_ = usageLog;
 }
 
+// Returns the usage-log collection rendered by the web interface.
 std::list<String>* TimeHttp::getLogArray() {
   return pUsageLog_;
 }
 
+// Stores the error-log collection rendered by the web interface.
 void TimeHttp::setErrorArray(std::list<String>* errorLog) {
   pErrorLog_ = errorLog;
 }
 
+// Stores the firmware updater used to stage and validate uploaded firmware.
 void TimeHttp::setFirmwareUpdater(FirmwareUpdater* firmwareUpdater) {
   pFirmwareUpdater_ = firmwareUpdater;
 }
 
+// Registers the callback that enables or disables firmware-update maintenance mode.
 void TimeHttp::setFirmwareMaintenanceFunction(void (*function)(bool active)) {
   fptrFirmwareMaintenance_ = function;
 }
 
+// Registers the callback that installs a validated staged firmware image.
 void TimeHttp::setFirmwareInstallFunction(void (*function)()) {
   fptrFirmwareInstall_ = function;
 }
 
+// Returns the error-log collection rendered by the web interface.
 std::list<String>* TimeHttp::getErrorArray() {
   return pErrorLog_;
 }
 
-// Percent-decode a String (e.g., "Hello%20World%21" -> "Hello World!")
-// Decodes only %XX hex bytes (ASCII). Unknown/invalid sequences keep the '%' as-is.
-// To decode '+' to mean space (common in URL query strings), set decodePlus=true.
+// Decodes percent-encoded bytes and optionally translates plus signs into spaces.
 String TimeHttp::percentDecode(const String& strHtml, bool decodePlus) {
   String out;
   out.reserve(strHtml.length()); // best-effort to avoid reallocs
@@ -315,6 +352,7 @@ String TimeHttp::percentDecode(const String& strHtml, bool decodePlus) {
   return out;
 }
 
+// Extracts and decodes one named form value from an HTTP request body.
 HtmlBodyValue_t TimeHttp::getValueFromBody(String key, const String& body, int startIndex) {
   HtmlBodyValue_t bodyValue;
   int index = 0;
@@ -341,6 +379,7 @@ HtmlBodyValue_t TimeHttp::getValueFromBody(String key, const String& body, int s
   return bodyValue;
 }
 
+// Stores complete request context and dispatches an HTTP request from the supplied client.
 bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gpsFixType, String gpsISO8601Time, String rtcISO8601Time) {
   pHttpClient_ = client;
   localIp_ = localIp;
@@ -350,6 +389,7 @@ bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gps
   return processRequest();
 }
 
+// Stores live request context and dispatches an HTTP request using time callbacks.
 bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gpsFixType) {
   pHttpClient_ = client;
   localIp_ = localIp;
@@ -357,6 +397,7 @@ bool TimeHttp::processRequest(EthernetClient* client, String localIp, String gps
   return processRequest();
 }
 
+// Reads, validates, routes, and closes the current HTTP client request.
 bool TimeHttp::processRequest() { // need verify httpClient before calling this method.
   String headers = "";
   String body = "";
@@ -672,6 +713,7 @@ bool TimeHttp::processRequest() { // need verify httpClient before calling this 
   return true;
 }
 
+// Authenticates, receives, validates, and stages a firmware upload request.
 void TimeHttp::processFirmwareRequest(const String& headers) {
   if (pFirmwareUpdater_ == nullptr || fptrFirmwareMaintenance_ == nullptr || fptrFirmwareInstall_ == nullptr) {
     sendPlainTextResponse(503, "Service Unavailable", "Firmware update service is not configured.\n");
@@ -855,6 +897,7 @@ void TimeHttp::processFirmwareRequest(const String& headers) {
   fptrFirmwareInstall_();
 }
 
+// Sends a complete plain-text HTTP response with the supplied status and message.
 void TimeHttp::sendPlainTextResponse(const uint16_t statusCode, const char* reason, const String& message) {
   pHttpClient_->print("HTTP/1.1 ");
   pHttpClient_->print(statusCode);
@@ -869,6 +912,7 @@ void TimeHttp::sendPlainTextResponse(const uint16_t statusCode, const char* reas
   pHttpClient_->print(message);
 }
 
+// Stores the supplied status values and sends the server home page.
 void TimeHttp::sendHomePage(const String appName, Properties* properties, String localIp, String gpsISO8601Time, String rtcISO8601Time) {
   appName_ = appName;
   pProperties_ = properties;
@@ -878,6 +922,7 @@ void TimeHttp::sendHomePage(const String appName, Properties* properties, String
   sendHomePage();
 }
 
+// Sends the HTML status page with live GNSS and static query-time RTC values.
 void TimeHttp::sendHomePage() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
@@ -923,6 +968,7 @@ void TimeHttp::sendHomePage() {
   pHttpClient_->println("</body></html>");
 }
 
+// Sends the current RTC time as a non-cacheable plain-text response.
 void TimeHttp::sendRtcTime() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/plain");
@@ -932,11 +978,13 @@ void TimeHttp::sendRtcTime() {
   pHttpClient_->print(rtcISO8601Time_);
 }
 
+// Stores a configuration buffer and sends the configuration page.
 void TimeHttp::sendConfigPage(String* config) {
   pConfig_ = config;
   sendConfigPage();
 }
 
+// Sends the generated server configuration as an HTML page.
 void TimeHttp::sendConfigPage() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
@@ -961,6 +1009,7 @@ void TimeHttp::sendConfigPage() {
   pHttpClient_->println("</body></html>");
 }
 
+// Sends the usage-log page and its authenticated clear action.
 void TimeHttp::sendLogPage() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
@@ -998,6 +1047,7 @@ void TimeHttp::sendLogPage() {
   pHttpClient_->println("</body></html>");
 }
 
+// Sends the error-log page and its authenticated clear action.
 void TimeHttp::sendErrorPage() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
@@ -1035,6 +1085,7 @@ void TimeHttp::sendErrorPage() {
   pHttpClient_->println("</body></html>");
 }
 
+// Sends the settings and firmware-update page with an optional restart notice.
 void TimeHttp::sendSetupPage(bool isSaved) {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");
@@ -1122,6 +1173,7 @@ void TimeHttp::sendSetupPage(bool isSaved) {
   pHttpClient_->println("</body></html>");
 }
 
+// Sends a passcode-error page that links back to the originating page.
 void TimeHttp::sendPasscodeError(WebPage page) {
   String strPageName = "";
   String strPageUrl = "";
@@ -1159,6 +1211,7 @@ void TimeHttp::sendPasscodeError(WebPage page) {
   pHttpClient_->println("</form></div></body></html>");
 }
 
+// Sends the reboot-wait page with a link back to server status.
 void TimeHttp::sendHttpWait() {
   pHttpClient_->println("HTTP/1.1 200 OK");
   pHttpClient_->println("Content-Type: text/html");

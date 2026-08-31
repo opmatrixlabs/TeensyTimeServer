@@ -24,16 +24,19 @@
 
 #include <limits.h>
 
+// Clears the cached GNSS status snapshot.
 void GnssStatusCache::clear() {
   hasSnapshot_ = false;
   snapshot_ = {};
 }
 
+// Stores a new GNSS status snapshot in the cache.
 void GnssStatusCache::update(const GnssStatusSnapshot& snapshot) {
   snapshot_ = snapshot;
   hasSnapshot_ = true;
 }
 
+// Copies the cached GNSS status snapshot to the caller when one is available.
 bool GnssStatusCache::get(GnssStatusSnapshot* snapshot) const {
   if (!hasSnapshot_ || snapshot == nullptr)
     return false;
@@ -42,12 +45,14 @@ bool GnssStatusCache::get(GnssStatusSnapshot* snapshot) const {
   return true;
 }
 
+// Reports whether the cached snapshot is present and within the permitted age.
 bool GnssStatusCache::isFresh(const uint32_t currentMillis,
                               const uint32_t maximumAgeMillis) const {
   return hasSnapshot_ &&
          static_cast<uint32_t>(currentMillis - snapshot_.receivedMillis) <= maximumAgeMillis;
 }
 
+// Converts the status refresh interval into a bounded NAV-PVT epoch rate.
 uint8_t navPvtEpochRateForStatusFrequency(const uint32_t statusFrequencyMillis,
                                           uint32_t navigationEpochMillis) {
   if (navigationEpochMillis == 0)
@@ -61,6 +66,7 @@ uint8_t navPvtEpochRateForStatusFrequency(const uint32_t statusFrequencyMillis,
   return static_cast<uint8_t>(epochRate);
 }
 
+// Calculates the elapsed time between NAV-PVT reports for an epoch rate.
 uint32_t navPvtReportPeriodMillis(uint8_t epochRate,
                                   uint32_t navigationEpochMillis) {
   if (epochRate == 0)
@@ -73,6 +79,7 @@ uint32_t navPvtReportPeriodMillis(uint8_t epochRate,
   return periodMillis > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(periodMillis);
 }
 
+// Calculates how long a GNSS status snapshot remains fresh.
 uint32_t gnssStatusFreshnessLimitMillis(const uint8_t epochRate,
                                         uint32_t navigationEpochMillis) {
   if (navigationEpochMillis == 0)
@@ -86,6 +93,7 @@ uint32_t gnssStatusFreshnessLimitMillis(const uint8_t epochRate,
              : static_cast<uint32_t>(freshnessLimitMillis);
 }
 
+// Returns a readable name for the GNSS fix state and type.
 const char* gnssFixTypeName(const bool fixOk, const uint8_t fixType) {
   if (!fixOk)
     return "No Fix";

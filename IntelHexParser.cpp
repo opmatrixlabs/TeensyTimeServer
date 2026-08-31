@@ -7,6 +7,7 @@
 
 namespace {
 
+// Converts one hexadecimal character to its numeric value.
 int8_t hexDigit(const char value) {
   if (value >= '0' && value <= '9')
     return static_cast<int8_t>(value - '0');
@@ -17,6 +18,7 @@ int8_t hexDigit(const char value) {
   return -1;
 }
 
+// Decodes two hexadecimal characters into one byte.
 bool decodeByte(const char* text, uint8_t* value) {
   const int8_t high = hexDigit(text[0]);
   const int8_t low = hexDigit(text[1]);
@@ -28,10 +30,12 @@ bool decodeByte(const char* text, uint8_t* value) {
 
 } // namespace
 
+// Initializes an Intel HEX parser in its reset state.
 IntelHexParser::IntelHexParser() {
   reset();
 }
 
+// Resets all parser state for a new Intel HEX stream.
 void IntelHexParser::reset() {
   lineLength_ = 0;
   sawEndOfFile_ = false;
@@ -39,6 +43,7 @@ void IntelHexParser::reset() {
   error_ = "";
 }
 
+// Consumes one input byte and emits a record when a complete line is available.
 IntelHexParseResult IntelHexParser::consume(const uint8_t value, IntelHexRecord* record) {
   if (failed_)
     return IntelHexParseResult::Error;
@@ -63,6 +68,7 @@ IntelHexParseResult IntelHexParser::consume(const uint8_t value, IntelHexRecord*
   return IntelHexParseResult::NeedMoreData;
 }
 
+// Finalizes parsing and validates that the stream ended correctly.
 IntelHexParseResult IntelHexParser::finish(IntelHexRecord* record) {
   if (failed_)
     return IntelHexParseResult::Error;
@@ -75,14 +81,17 @@ IntelHexParseResult IntelHexParser::finish(IntelHexRecord* record) {
   return IntelHexParseResult::NeedMoreData;
 }
 
+// Returns the parser's most recent error message.
 const char* IntelHexParser::error() const {
   return error_;
 }
 
+// Reports whether an Intel HEX end-of-file record has been parsed.
 bool IntelHexParser::sawEndOfFile() const {
   return sawEndOfFile_;
 }
 
+// Parses and validates the complete Intel HEX line currently buffered.
 IntelHexParseResult IntelHexParser::parseLine(IntelHexRecord* record) {
   line_[lineLength_] = '\0';
   const std::size_t length = lineLength_;
@@ -126,6 +135,7 @@ IntelHexParseResult IntelHexParser::parseLine(IntelHexRecord* record) {
   return IntelHexParseResult::RecordReady;
 }
 
+// Records a permanent parser error and returns the error result.
 IntelHexParseResult IntelHexParser::fail(const char* message) {
   failed_ = true;
   error_ = message;

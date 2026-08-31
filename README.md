@@ -123,17 +123,6 @@ arduino-cli compile --fqbn teensy:avr:teensyMM --libraries C:\Development\Arduin
 
 The final flash replacement is not power-fail-safe. Removing power during installation can require recovery through USB and the DEV-20748 BOOT button.
 
-## Basic Validation
-
-After assembly or a firmware update, verify the following:
-
-1. The W5500 obtains the expected network configuration and both the HTTP and NTP services respond.
-2. The web status reports a current GNSS fix and fresh `UBX-TIM-TP` data.
-3. The captured TP1 pulse count advances once per second and reports an interval close to 1,000,000 microseconds.
-4. The NTP clock reports that it is anchored and confirmed before clients treat the server as synchronized.
-5. The RTC is detected on its Qwiic branch and synchronizes at startup and at the configured RTC sync interval.
-6. Display, Alternate Display, and Status Frequency changes behave as configured.
-
 ## Hardware References
 
 - [SparkFun MicroMod Main Board Hookup Guide V2](https://learn.sparkfun.com/tutorials/micromod-main-board-hookup-guide-v2/hardware-overview)

@@ -8,6 +8,7 @@
 #include <assert.h>
 
 namespace {
+// Verifies that an anchored PPS clock interpolates time from elapsed microseconds.
 void testAnchorAndInterpolation() {
   PpsClock clock;
   NormalizedTimestamp timestamp = {};
@@ -19,6 +20,7 @@ void testAnchorAndInterpolation() {
   assert(timestamp.nanoseconds == 123456250UL);
 }
 
+// Verifies that advancing across pulses updates the stored anchor consistently.
 void testPulseAdvancement() {
   PpsClock clock;
   assert(clock.setAnchor(10, 1000000, normalizeTimestamp(100, 500)));
@@ -34,6 +36,7 @@ void testPulseAdvancement() {
   assert(anchor.nanoseconds == 500);
 }
 
+// Verifies that interpolation remains correct when the microsecond counter wraps.
 void testMicrosWrap() {
   PpsClock clock;
   NormalizedTimestamp timestamp = {};
@@ -43,6 +46,7 @@ void testMicrosWrap() {
   assert(timestamp.nanoseconds == 512000);
 }
 
+// Verifies that invalid pulse timing clears the PPS clock anchor.
 void testInvalidTimingResetsClock() {
   PpsClock clock;
   NormalizedTimestamp timestamp = {};
@@ -52,6 +56,7 @@ void testInvalidTimingResetsClock() {
   assert(!clock.timestampAt(200, &timestamp));
 }
 
+// Verifies that elapsed pulse timing agrees with the reported pulse count.
 void testMissedPulseTimingMustMatchPulseCount() {
   PpsClock clock;
   assert(clock.setAnchor(10, 1000000, normalizeTimestamp(200, 0)));
@@ -59,6 +64,7 @@ void testMissedPulseTimingMustMatchPulseCount() {
   assert(!clock.isAnchored());
 }
 
+// Verifies that measured PPS intervals discipline the interpolation scale.
 void testPpsDisciplinesInterpolationScale() {
   PpsClock clock;
   NormalizedTimestamp timestamp = {};
@@ -69,6 +75,7 @@ void testPpsDisciplinesInterpolationScale() {
   assert(timestamp.nanoseconds == 500000000UL);
 }
 
+// Verifies that the first labelled pulse establishes a disciplined interpolation scale.
 void testInitialLabelledPulseDisciplinesInterpolationScale() {
   PpsClock clock;
   NormalizedTimestamp timestamp = {};
@@ -84,6 +91,7 @@ void testInitialLabelledPulseDisciplinesInterpolationScale() {
 }
 }
 
+// Runs all PPS clock unit tests and reports success through the process exit code.
 int main() {
   testAnchorAndInterpolation();
   testPulseAdvancement();

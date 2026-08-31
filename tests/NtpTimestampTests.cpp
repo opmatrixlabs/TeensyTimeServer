@@ -23,6 +23,7 @@
 
 #include <assert.h>
 
+// Verifies that timestamp normalization carries and borrows nanoseconds correctly.
 void testNormalization() {
   NormalizedTimestamp timestamp = normalizeTimestamp(100, 1000000000LL);
   assert(timestamp.secondsSince1900 == 101);
@@ -41,6 +42,7 @@ void testNormalization() {
   assert(timestamp.nanoseconds == 500000000);
 }
 
+// Verifies that nanoseconds convert to the expected NTP fractional representation.
 void testNtpFractionConversion() {
   assert(toNtpTimestamp(normalizeTimestamp(0, 0)).fraction == 0x00000000UL);
   assert(toNtpTimestamp(normalizeTimestamp(0, 1)).fraction == 0x00000004UL);
@@ -54,12 +56,14 @@ void testNtpFractionConversion() {
   assert(toNtpTimestamp(normalizeTimestamp(0, 999999999)).fraction == 0xFFFFFFFBUL);
 }
 
+// Verifies that seconds wrap correctly across the NTP era boundary.
 void testNtpEraOffsetConversion() {
   assert(toNtpTimestamp(normalizeTimestamp(4294967295LL, 0)).seconds == 0xFFFFFFFFUL);
   assert(toNtpTimestamp(normalizeTimestamp(4294967296LL, 0)).seconds == 0x00000000UL);
   assert(toNtpTimestamp(normalizeTimestamp(4294967297LL, 0)).seconds == 0x00000001UL);
 }
 
+// Verifies that integer and timestamp fields serialize in network byte order.
 void testBigEndianSerialization() {
   uint8_t valueBytes[4] = {};
   writeUint32BigEndian(valueBytes, 0x12345678UL);
@@ -83,6 +87,7 @@ void testBigEndianSerialization() {
   assert(timestampBytes[9] == 0xA5);
 }
 
+// Runs all NTP timestamp unit tests and reports success through the process exit code.
 int main() {
   testNormalization();
   testNtpFractionConversion();

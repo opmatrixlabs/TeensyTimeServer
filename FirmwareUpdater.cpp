@@ -38,6 +38,7 @@ constexpr uint32_t PAGE_SIZE = 0x100UL;
 
 #define FIRMWARE_RAM_FUNCTION __attribute__((section(".fastrun"), noinline, noclone, optimize("Os")))
 
+// Maps a FlexSPI flash address to a typed memory-mapped pointer.
 template <typename T>
 __attribute__((always_inline)) inline T* memoryMappedFlashPointer(const uint32_t address) {
   // Form the pointer from the fixed hardware base, then retain it while
@@ -46,6 +47,7 @@ __attribute__((always_inline)) inline T* memoryMappedFlashPointer(const uint32_t
   return reinterpret_cast<T*>(flashBase + (address - FLASH_BASE_ADDRESS));
 }
 
+// Reports whether the flash sector containing the address has programmed data.
 FIRMWARE_RAM_FUNCTION bool firmwareFlashSectorNotErased(const uint32_t address) {
   const volatile uint32_t* word = memoryMappedFlashPointer<const volatile uint32_t>(
       address & ~(SECTOR_SIZE - 1U));
@@ -58,6 +60,7 @@ FIRMWARE_RAM_FUNCTION bool firmwareFlashSectorNotErased(const uint32_t address) 
 
 // This operation is intentionally non-atomic. The web UI warns that removing
 // power during this final phase can require USB/BOOT-button recovery.
+// Replaces the running firmware from staging, cleans obsolete sectors, and reboots.
 [[noreturn]] FIRMWARE_RAM_FUNCTION void replaceFirmwareAndReboot(const uint32_t imageSize) {
   // BASEPRI remains set even though the Teensy flash primitives briefly clear
   // PRIMASK internally. This prevents ordinary peripheral/timer interrupts
@@ -129,6 +132,7 @@ FIRMWARE_RAM_FUNCTION bool firmwareFlashSectorNotErased(const uint32_t address) 
   for (;;) {}
 }
 
+// Reports whether every byte in a staging flash sector is erased.
 bool stagingSectorIsErased(const uint32_t address) {
   const volatile uint32_t* word = memoryMappedFlashPointer<const volatile uint32_t>(address);
   for (uint32_t index = 0; index < SECTOR_SIZE / sizeof(uint32_t); ++index) {
@@ -138,6 +142,7 @@ bool stagingSectorIsErased(const uint32_t address) {
   return true;
 }
 
+// Reads a big-endian 32-bit word from a four-byte buffer.
 uint32_t bigEndianWord(const uint8_t* data) {
   return (static_cast<uint32_t>(data[0]) << 24) |
          (static_cast<uint32_t>(data[1]) << 16) |
@@ -147,10 +152,12 @@ uint32_t bigEndianWord(const uint8_t* data) {
 
 } // namespace
 
+// Initializes the firmware updater and resets its Intel HEX parser.
 FirmwareUpdater::FirmwareUpdater() {
   parser_.reset();
 }
 
+// Starts a new firmware upload after validating the updater and image-size constraints.
 bool FirmwareUpdater::begin(const uint32_t encodedLength) {
   // Preserve a validated staged image while the browser is being redirected
   // and installation is pending. In particular, do not call fail() here: it
@@ -197,6 +204,7 @@ bool FirmwareUpdater::begin(const uint32_t encodedLength) {
   return true;
 }
 
+// Parses and stages a block of uploaded Intel HEX data.
 bool FirmwareUpdater::write(const uint8_t* data, const std::size_t length) {
   if (!active_ || readyToInstall_)
     return fail(FirmwareUpdateFailure::ServerState, "firmware upload is not active");
@@ -214,6 +222,7 @@ bool FirmwareUpdater::write(const uint8_t* data, const std::size_t length) {
   return true;
 }
 
+// Finalizes parsing, validates the staged image, and marks it ready for installation.
 bool FirmwareUpdater::finish() {
   if (!active_ || readyToInstall_)
     return fail(FirmwareUpdateFailure::ServerState, "firmware upload is not active");
@@ -236,6 +245,7 @@ bool FirmwareUpdater::finish() {
   return true;
 }
 
+// Cancels the active upload and clears its parser and installation state.
 void FirmwareUpdater::abort() {
   active_ = false;
   readyToInstall_ = false;
@@ -244,26 +254,32 @@ void FirmwareUpdater::abort() {
   // Avoid a long blocking erase after a network disconnect or invalid file.
 }
 
+// Returns the most recent firmware-update error message.
 const char* FirmwareUpdater::error() const {
   return error_;
 }
 
+// Returns the category of the most recent firmware-update failure.
 FirmwareUpdateFailure FirmwareUpdater::failure() const {
   return failure_;
 }
 
+// Returns the validated firmware image size in bytes.
 uint32_t FirmwareUpdater::imageSize() const {
   return imageSize_;
 }
 
+// Returns the number of firmware data records processed.
 uint32_t FirmwareUpdater::recordCount() const {
   return recordCount_;
 }
 
+// Reports whether a validated staged image is ready to install.
 bool FirmwareUpdater::readyToInstall() const {
   return readyToInstall_;
 }
 
+// Installs the validated staged image and reboots the processor.
 [[noreturn]] void FirmwareUpdater::installAndReboot() {
   if (!readyToInstall_ || imageSize_ == 0) {
     SCB_AIRCR = 0x05FA0004;
@@ -272,6 +288,7 @@ bool FirmwareUpdater::readyToInstall() const {
   replaceFirmwareAndReboot(imageSize_);
 }
 
+// Validates and processes one parsed Intel HEX record.
 bool FirmwareUpdater::processRecord(const IntelHexRecord& record) {
   if (sawEndOfFile_)
     return fail(FirmwareUpdateFailure::InvalidUpload, "record appears after the Intel HEX end-of-file record");
@@ -326,6 +343,7 @@ bool FirmwareUpdater::processRecord(const IntelHexRecord& record) {
   }
 }
 
+// Writes one contiguous firmware data record into staging flash and verifies it.
 bool FirmwareUpdater::stageData(const uint32_t imageAddress, const uint8_t* data, const uint32_t length) {
   const uint32_t imageOffset = imageAddress - FLASH_BASE;
   const uint32_t stagingAddress = STAGING_BASE + imageOffset;
@@ -352,6 +370,7 @@ bool FirmwareUpdater::stageData(const uint32_t imageAddress, const uint8_t* data
   return true;
 }
 
+// Erases staging sectors as needed through the requested exclusive end address.
 bool FirmwareUpdater::eraseStagingThrough(const uint32_t exclusiveEnd) {
   while (erasedThrough_ < exclusiveEnd) {
     if (erasedThrough_ < STAGING_BASE || erasedThrough_ >= PROGRAM_FLASH_END)
@@ -365,6 +384,7 @@ bool FirmwareUpdater::eraseStagingThrough(const uint32_t exclusiveEnd) {
   return true;
 }
 
+// Validates the complete firmware image stored in staging flash.
 bool FirmwareUpdater::validateImage() {
   const FirmwareImageValidation validation = validateTeensyTimeServerImage(
       memoryMappedFlashPointer<const volatile uint8_t>(STAGING_BASE), imageSize_);
@@ -373,6 +393,7 @@ bool FirmwareUpdater::validateImage() {
   return true;
 }
 
+// Records a firmware-update failure and clears active installation state.
 bool FirmwareUpdater::fail(const FirmwareUpdateFailure failure, const char* message) {
   active_ = false;
   readyToInstall_ = false;

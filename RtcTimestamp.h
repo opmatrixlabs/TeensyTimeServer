@@ -21,8 +21,7 @@ struct RtcDateTime {
   uint8_t hundredths = 0;
 };
 
-// Decode one complete RV-1805 time-register burst. General-purpose bits which
-// share the time registers are masked according to the RV-1805 register map.
+// Decodes one complete RV-1805 time-register burst while masking shared general-purpose bits.
 bool decodeRv1805Timestamp(const uint8_t* registers,
                            std::size_t registerCount,
                            RtcDateTime* timestamp);

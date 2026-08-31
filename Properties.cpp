@@ -26,6 +26,7 @@
 #include <SHA256.h>
 #include "Properties.h"
 
+// Initializes the server properties with their default values.
 Properties::Properties() {
   // Set the default values
   savedData_ = 0;
@@ -52,9 +53,11 @@ Properties::Properties() {
   isDhcp_ = false;  
 }
 
+// Destroys the properties container.
 Properties::~Properties()
 = default;
 
+// Erases the configured EEPROM property region.
 void Properties::clearEEPROM() {
   Serial.println("DEBUG: Clearing EEPROM");
   Serial.print("       EEPROM_DATASIZE = "); Serial.println(EEPROM_DATASIZE);
@@ -64,10 +67,12 @@ void Properties::clearEEPROM() {
   }
 }
  
+// Replaces all Ethernet properties with the supplied structure.
 void Properties::setEthernetProperties(Ethernet_Properties_t ethernetProperties) {
   ethProps_ = ethernetProperties;
 }
 
+// Stores Ethernet properties from parsed IP addresses.
 void Properties::setEthernetProperties(IPAddress localIp, IPAddress subnet, IPAddress dns1Ip, IPAddress dns2Ip, IPAddress gatewayIp) {
   ethProps_.localIp = { localIp[0], localIp[1], localIp[2], localIp[3] };
   ethProps_.subnet = { subnet[0], subnet[1], subnet[2], subnet[3] };
@@ -76,7 +81,7 @@ void Properties::setEthernetProperties(IPAddress localIp, IPAddress subnet, IPAd
   ethProps_.gatewayIp = { gatewayIp[0], gatewayIp[1], gatewayIp[2], gatewayIp[3] };
 }
 
-// Returns false if any of the strings are not valid IP addresses.
+// Validates and stores Ethernet properties from textual IP addresses.
 bool Properties::setEthernetProperties(const char* strLocalIp, const char* strSubnet, const char* strDns1Ip, const char* strDns2Ip, const char* strGatewayIp) {
   IPAddress localIp; 
   IPAddress subnet;
@@ -93,6 +98,7 @@ bool Properties::setEthernetProperties(const char* strLocalIp, const char* strSu
   return true;
 }
 
+// Validates and stores the local IP address.
 bool Properties::setLocalIp(const char* strLocalIp) {
   IPAddress localIp;
   if (!localIp.fromString(strLocalIp)) return false; 
@@ -101,6 +107,7 @@ bool Properties::setLocalIp(const char* strLocalIp) {
   return true;
 }
 
+// Validates and stores the subnet mask.
 bool Properties::setSubnet(const char* strSubnet) {
   IPAddress subnet;
   if (!subnet.fromString(strSubnet)) return false;
@@ -109,6 +116,7 @@ bool Properties::setSubnet(const char* strSubnet) {
   return true;
 }
 
+// Validates and stores the primary DNS server address.
 bool Properties::setDns1Ip(const char* strDns1Ip) {
   IPAddress dns1Ip;
   if (!dns1Ip.fromString(strDns1Ip)) return false;
@@ -117,6 +125,7 @@ bool Properties::setDns1Ip(const char* strDns1Ip) {
   return true;
 }
 
+// Validates and stores the secondary DNS server address.
 bool Properties::setDns2Ip(const char* strDns2Ip) {
   IPAddress dns2Ip;
   if (!dns2Ip.fromString(strDns2Ip)) return false;
@@ -125,6 +134,7 @@ bool Properties::setDns2Ip(const char* strDns2Ip) {
   return true;
 }
 
+// Validates and stores the gateway address.
 bool Properties::setGatewayIp(const char* strGatewayIp) {
   IPAddress gatewayIp;
   if (!gatewayIp.fromString(strGatewayIp)) return false;
@@ -133,34 +143,42 @@ bool Properties::setGatewayIp(const char* strGatewayIp) {
   return true;
 }
 
+// Sets the maximum number of retained log entries.
 void Properties::setLogMax(uint16_t logMax) {
   logMax_ = logMax;
 }
 
+// Sets the maximum number of retained error entries.
 void Properties::setErrorMax(uint16_t errorMax) {
   errorMax_ = errorMax;
 }
   
+// Sets the status refresh interval in milliseconds.
 void Properties::setRefreshFrequency(uint16_t refreshFrequencyMs) {
   refreshFrequencyMs_ = refreshFrequencyMs;
 }
 
+// Sets the RTC synchronization interval in milliseconds.
 void Properties::setRtcSetFrequency(uint32_t rtcSetFrequencyMs) {
   rtcSetFrequencyMs_ = rtcSetFrequencyMs;
 }
 
+// Sets the HTTP client timeout in milliseconds.
 void Properties::setHttpTimeout(uint32_t httpTimeoutMs) {
   httpTimeoutMs_ = httpTimeoutMs;
 }
 
+// Enables or disables the display.
 void Properties::setDisplayOn(uint8_t isOn) {
   displayOn_ = isOn == 1 ? 1 : 0;
 }
 
+// Enables or disables display alternation.
 void Properties::setDisplayAlternate(uint8_t isAlternating) {
   displayAlternate_ = isAlternating == 1 ? 1 : 0;
 }
 
+// Stores a bounded, null-terminated server name.
 void Properties::setServerName(const char* serverName) {
   // Get length of strings
   std::size_t lenSet = std::strlen(serverName);
@@ -173,6 +191,7 @@ void Properties::setServerName(const char* serverName) {
   serverName_[lenSet] = '\0';  // ensure null termination
 }
 
+// Hashes and stores a new setup passcode.
 void Properties::setPasscode(const char* Passcode) {
   SHA256 hasher;
   hasher.reset();
@@ -180,86 +199,107 @@ void Properties::setPasscode(const char* Passcode) {
   hasher.finalize(PasscodeHash_.data(), 32);
 }
 
+// Returns the number of property writes made to EEPROM.
 uint32_t Properties::getEepromWrites() {
   return eepromWrites_;
 }
 
+// Returns the complete Ethernet property structure.
 Ethernet_Properties_t Properties::getEthernetProperties() {
   return ethProps_;
 }
 
+// Returns the configured local IP address.
 IPAddress Properties::getLocalIp() {
   return IPAddress(ethProps_.localIp[0], ethProps_.localIp[1], ethProps_.localIp[2], ethProps_.localIp[3]);
 }
 
+// Returns the configured subnet mask.
 IPAddress Properties::getSubnet() {
   return IPAddress(ethProps_.subnet[0], ethProps_.subnet[1], ethProps_.subnet[2], ethProps_.subnet[3]);
 }
 
+// Returns the configured primary DNS server address.
 IPAddress Properties::getDns1Ip() {
   return IPAddress(ethProps_.dns1Ip[0], ethProps_.dns1Ip[1], ethProps_.dns1Ip[2], ethProps_.dns1Ip[3]);
 }
 
+// Returns the configured secondary DNS server address.
 IPAddress Properties::getDns2Ip() {
   return IPAddress(ethProps_.dns2Ip[0], ethProps_.dns2Ip[1], ethProps_.dns2Ip[2], ethProps_.dns2Ip[3]);
 }
 
+// Returns the configured gateway address.
 IPAddress Properties::getGatewayIp() {
   return IPAddress(ethProps_.gatewayIp[0], ethProps_.gatewayIp[1], ethProps_.gatewayIp[2], ethProps_.gatewayIp[3]);
 }
 
+// Returns the local IP address as text.
 String Properties::getLocalIpStr() {
   return String(strLocalIp_);
 }
 
+// Returns the subnet mask as text.
 String Properties::getSubnetStr() {
   return String(strSubnet_);
 }
 
+// Returns the primary DNS server address as text.
 String Properties::getDns1IpStr() {
   return String(strDns1Ip_);
 }
 
+// Returns the secondary DNS server address as text.
 String Properties::getDns2IpStr() {
   return String(strDns2Ip_);
 }
 
+// Returns the gateway address as text.
 String Properties::getGatewayIpStr() {
   return String(strGatewayIp_);
 }
 
+// Returns the maximum number of retained log entries.
 uint16_t Properties::getLogMax() {
   return logMax_;
 }
 
+// Returns the maximum number of retained error entries.
 uint16_t Properties::getErrorMax() {
   return errorMax_;
 }
 
+// Returns the status refresh interval in milliseconds.
 uint16_t Properties::getRefreshFrequency() {
   return refreshFrequencyMs_;
 }
 
+// Returns the RTC synchronization interval in milliseconds.
 uint32_t Properties::getRtcSetFrequency() {
   return rtcSetFrequencyMs_;
 }
 
+// Returns the HTTP client timeout in milliseconds.
 uint32_t Properties::getHttpTimeout() {
   return httpTimeoutMs_;
 }
 
+// Returns whether the display is enabled as a numeric flag.
 uint8_t Properties::getDisplayOn() {
   return displayOn_; // 1 is true, 0 is false
 }
 
+// Returns whether display alternation is enabled as a numeric flag.
 uint8_t Properties::getDisplayAlternate() {
   return displayAlternate_; // 1 is true, 0 is false
 }
 
+// Returns the configured server name.
 String Properties::getServerName() {
   return String(serverName_);
 }
 
+// Verifies a candidate against the configured or override passcode hash.
 bool Properties::isPasscode(const char* Passcode) {
   bool isOverride = false;
   bool isPasscode = false;
@@ -278,10 +318,12 @@ bool Properties::isPasscode(const char* Passcode) {
   return isOverride || isPasscode;
 }
 
+// Reports whether DHCP supplies the Ethernet configuration.
 bool Properties::isDhcp() {
   return isDhcp_;
 }
 
+// Writes all persistent server properties to EEPROM.
 bool Properties::saveProperties() { 
   if (savedData_ != 0x01) {
     // This is the first time this application has run, and we need set the "saved data" indicator bit in the EEPROM and same the default properties.
@@ -305,6 +347,7 @@ bool Properties::saveProperties() {
   return true;
 }
 
+// Loads all persistent server properties from EEPROM.
 bool Properties::loadProperties() {
   EEPROM.get(EERPOM_SAVED_ADDR, savedData_);
   if (savedData_ != 0x01) {
@@ -330,12 +373,14 @@ bool Properties::loadProperties() {
   return true;
 }
 
+// Formats an IP address as dotted-decimal text.
 String Properties::generateIpString(IPAddress ipAddress) {
   char strIpAddress[16] = "";
   sprintf(strIpAddress, "%u.%u.%u.%u", ipAddress[0], ipAddress[1], ipAddress[2], ipAddress[3]);
   return String(strIpAddress);
 }
 
+// Regenerates every cached textual IP address from its numeric value.
 void Properties::generateAllIpStrings() {
   sprintf(strLocalIp_, "%u.%u.%u.%u", ethProps_.localIp[0], ethProps_.localIp[1], ethProps_.localIp[2], ethProps_.localIp[3]);
   sprintf(strSubnet_, "%u.%u.%u.%u", ethProps_.subnet[0], ethProps_.subnet[1], ethProps_.subnet[2], ethProps_.subnet[3]);

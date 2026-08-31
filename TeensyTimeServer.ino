@@ -24,6 +24,8 @@
  * NOTE: The RTC timestamps log entries. NTP time is disciplined by GNSS TP1
  * and labelled with UBX-TIM-TP; the RTC is not in the NTP timing path.
  */
+#include <cstddef>
+#include <iterator>
 #include <list>
 
 #include <SPI.h> // Needed for SPI to Ethernet
@@ -94,7 +96,7 @@ void recordError(String error);
 void displaySettings();
 
 const char* APP_NAME = "GPS NTP Time Server";
-const char* VERSION = "3.0";
+const char* VERSION = "3.1";
 const char* AUTHOR = "Andrew Kevin Bailey";
 
 /**** Setup Properties init *****/
@@ -207,6 +209,7 @@ uint32_t rtcReferencePulseCount = 0;
 uint32_t rtcWriteMicros = DEFAULT_RTC_WRITE_MICROS;
 bool rtcSyncErrorReported = false;
 bool rtcInitializationFailureReported = false;
+bool rtcStartupSynchronizationRequested = false;
 uint32_t lastRtcInitializationAttemptMillis = 0;
 
 /***** Logging data init *****/
@@ -354,6 +357,7 @@ uint32_t firmwareInstallRequestedMillis = 0;
 namespace {
 
 void recordRtcTimestampError(String error);
+void appendTimestampedLog(const String& timestamp, const String& log);
 
 struct GnssVal8Setting {
   uint32_t key;
@@ -392,15 +396,18 @@ constexpr GnssVal8Setting GNSS_VAL8_SETTINGS[] = {
   { UBLOX_CFG_MSGOUT_UBX_NAV_PVT_I2C, 0, true, "NAV-PVT startup rate" }
 };
 
+// Reports whether the requested interval has elapsed using rollover-safe arithmetic.
 bool hasElapsed(const uint32_t now, const uint32_t since, const uint32_t interval) {
   return static_cast<uint32_t>(now - since) >= interval;
 }
 
+// Discards all unread bytes currently buffered by the RTC I2C interface.
 void discardRtcReceiveBuffer() {
   while (Wire.available() > 0)
     static_cast<void>(Wire.read());
 }
 
+// Reads a contiguous block of RTC registers into the supplied buffer.
 bool readRtcRegisters(const uint8_t firstRegister,
                       uint8_t* registers,
                       const uint8_t registerCount) {
@@ -440,6 +447,7 @@ enum class RtcTimestampReadStatus : uint8_t {
   InvalidTimestamp
 };
 
+// Reads and decodes one complete RTC timestamp.
 RtcTimestampReadStatus readRtcDateTime(RtcDateTime* timestamp) {
   if (timestamp == nullptr)
     return RtcTimestampReadStatus::InvalidTimestamp;
@@ -450,11 +458,14 @@ RtcTimestampReadStatus readRtcDateTime(RtcDateTime* timestamp) {
                         RV1805_TIMESTAMP_REGISTER_COUNT))
     return RtcTimestampReadStatus::TransportFailure;
 
-  return decodeRv1805Timestamp(registers, sizeof(registers), timestamp)
+  return decodeRv1805Timestamp(registers,
+                               std::size(registers),
+                               timestamp)
              ? RtcTimestampReadStatus::Success
              : RtcTimestampReadStatus::InvalidTimestamp;
 }
 
+// Returns the bounded retry delay for the specified GNSS initialization attempt.
 uint32_t gnssRetryBackoff(const uint8_t attempt) {
   constexpr uint32_t RETRY_DELAYS[] = { 1000, 2000, 4000, 8000, 16000, 30000 };
   uint8_t index = attempt > 0 ? static_cast<uint8_t>(attempt - 1) : 0;
@@ -465,6 +476,7 @@ uint32_t gnssRetryBackoff(const uint8_t attempt) {
              : RETRY_DELAYS[index];
 }
 
+// Returns a human-readable name for a GNSS initialization state.
 const char* gnssInitializationStateName(const GnssInitializationState state) {
   switch (state) {
     case GnssInitializationState::WaitingForPower: return "waiting for power";
@@ -486,6 +498,7 @@ const char* gnssInitializationStateName(const GnssInitializationState state) {
   return "unknown";
 }
 
+// Enters a GNSS initialization state after an optional delay.
 void setGnssInitializationState(const GnssInitializationState state,
                                 const uint32_t delayMillis = 0) {
   gnssInitializationState = state;
@@ -494,6 +507,7 @@ void setGnssInitializationState(const GnssInitializationState state,
   gnssInitializationAttempts = 0;
 }
 
+// Resets GNSS initialization state and schedules a new probe after backoff.
 void restartGnssInitialization(const char* reason, const uint8_t backoffAttempt) {
   gnssReady = false;
   gnssDetected = false;
@@ -514,6 +528,7 @@ void restartGnssInitialization(const char* reason, const uint8_t backoffAttempt)
   recordError(reason);
 }
 
+// Schedules a retry of the current GNSS initialization operation after a failure.
 void scheduleGnssInitializationRetry(const char* reason) {
   gnssReady = false;
   invalidatePpsTimebase();
@@ -541,6 +556,7 @@ void scheduleGnssInitializationRetry(const char* reason) {
   gnssStateDelayMillis = gnssRetryBackoff(gnssInitializationAttempts);
 }
 
+// Tracks I2C startup results and reinitializes the bus after repeated total failures.
 void noteI2cInitializationResult(const bool success) {
   if (success) {
     consecutiveI2cStartupFailures = 0;
@@ -562,10 +578,12 @@ void noteI2cInitializationResult(const bool success) {
   recordError("All I2C peripherals were unavailable; the I2C controller was reinitialized");
 }
 
+// Reports whether an Ethernet service interval has elapsed.
 bool ethernetElapsed(const uint32_t now, const uint32_t since, const uint32_t interval) {
   return hasElapsed(now, since, interval);
 }
 
+// Returns the retry delay for the specified Ethernet recovery attempt.
 uint32_t ethernetRetryBackoff(const uint8_t attempt) {
   constexpr uint32_t RETRY_DELAYS[] = { 1000, 2000, 4000, 8000, 16000, 30000 };
   uint8_t index = attempt > 0 ? static_cast<uint8_t>(attempt - 1) : 0;
@@ -574,16 +592,19 @@ uint32_t ethernetRetryBackoff(const uint8_t attempt) {
   return RETRY_DELAYS[index];
 }
 
+// Increments an Ethernet retry counter without allowing it to overflow.
 uint8_t incrementEthernetAttempt(const uint8_t attempt) {
   return attempt < UINT8_MAX ? static_cast<uint8_t>(attempt + 1) : UINT8_MAX;
 }
 
+// Enters an Ethernet service state and resets its timing information.
 void setEthernetState(const EthernetServiceState state) {
   ethernetServiceState = state;
   ethernetStateStartedMillis = millis();
   ethernetRetryDelayMillis = 0;
 }
 
+// Schedules an Ethernet service state to retry after its calculated backoff.
 void scheduleEthernetRetry(const EthernetServiceState state, const uint8_t attempt) {
   ethernetRetryState = state;
   ethernetRetryDelayMillis = ethernetRetryBackoff(attempt);
@@ -591,6 +612,7 @@ void scheduleEthernetRetry(const EthernetServiceState state, const uint8_t attem
   ethernetServiceState = EthernetServiceState::RetryBackoff;
 }
 
+// Updates the displayed network strings from the active saved configuration.
 void setConfiguredNetworkStrings() {
   if (activeEthernetDhcp) {
     strLocalIp = "0.0.0.0";
@@ -608,6 +630,7 @@ void setConfiguredNetworkStrings() {
   strGatewayIp = properties.generateIpString(activeEthernetGatewayIp);
 }
 
+// Updates the displayed network strings from the Ethernet controller's active settings.
 void updateNetworkStringsFromEthernet() {
   strLocalIp = properties.generateIpString(Ethernet.localIP());
   strSubnet = properties.generateIpString(Ethernet.subnetMask());
@@ -616,6 +639,7 @@ void updateNetworkStringsFromEthernet() {
   strGatewayIp = properties.generateIpString(Ethernet.gatewayIP());
 }
 
+// Reports whether two IPv4 addresses contain identical octets.
 bool ipAddressesMatch(const IPAddress left, const IPAddress right) {
   for (uint8_t index = 0; index < 4; ++index) {
     if (left[index] != right[index])
@@ -624,10 +648,12 @@ bool ipAddressesMatch(const IPAddress left, const IPAddress right) {
   return true;
 }
 
+// Reports whether an IPv4 address is the all-zero address.
 bool isZeroIpAddress(const IPAddress address) {
   return address[0] == 0 && address[1] == 0 && address[2] == 0 && address[3] == 0;
 }
 
+// Verifies that the Ethernet controller contains the configured MAC address.
 bool ethernetMacAddressIsValid() {
   uint8_t currentMac[sizeof(mac)] = {};
   Ethernet.MACAddress(currentMac);
@@ -638,6 +664,7 @@ bool ethernetMacAddressIsValid() {
   return true;
 }
 
+// Captures the network configuration currently applied to the Ethernet controller.
 void captureAppliedEthernetConfiguration() {
   appliedEthernetLocalIp = Ethernet.localIP();
   appliedEthernetSubnet = Ethernet.subnetMask();
@@ -647,6 +674,7 @@ void captureAppliedEthernetConfiguration() {
       !isZeroIpAddress(appliedEthernetSubnet);
 }
 
+// Checks whether the W5500 responds with its expected hardware version value.
 bool isW5500Responsive() {
   SPIClass* ethernetSpi = Ethernet.spi();
   if (ethernetSpi == nullptr)
@@ -658,6 +686,7 @@ bool isW5500Responsive() {
   return version == 4;
 }
 
+// Verifies that the Ethernet controller still holds the applied network configuration.
 bool ethernetConfigurationIsValid() {
   if (!appliedEthernetConfigurationValid || !ethernetMacAddressIsValid())
     return false;
@@ -667,6 +696,7 @@ bool ethernetConfigurationIsValid() {
          ipAddressesMatch(Ethernet.gatewayIP(), appliedEthernetGatewayIp);
 }
 
+// Finds the unique W5500 UDP socket bound to the configured NTP port.
 uint8_t findNtpSocketNumber() {
   SPIClass* ethernetSpi = Ethernet.spi();
   if (ethernetSpi == nullptr)
@@ -688,12 +718,14 @@ uint8_t findNtpSocketNumber() {
   return matchingSocket;
 }
 
+// Reports whether the tracked NTP UDP socket remains correctly bound and identifiable.
 bool ntpSocketIsHealthy() {
   if (!ntpUdpBound || udp.localPort() != ntpPort || ntpSocketNumber >= MAX_SOCK_NUM)
     return false;
   return findNtpSocketNumber() == ntpSocketNumber;
 }
 
+// Reports whether any server-owned W5500 socket is actively serving HTTP traffic.
 bool httpSocketIsHealthy() {
   // A normal TCP handshake temporarily changes the only LISTEN socket to
   // ESTABLISHED before EthernetServer::available() opens a replacement. Treat
@@ -716,17 +748,20 @@ bool httpSocketIsHealthy() {
   return activeSocketFound;
 }
 
+// Pulses the W5500 reset line to restart the Ethernet controller.
 void pulseW5500Reset() {
   digitalWrite(W5500_RESET_PIN, LOW);
   delayMicroseconds(W5500_RESET_LOW_MICROS);
   digitalWrite(W5500_RESET_PIN, HIGH);
 }
 
+// Clears the HTTP server's W5500 socket ownership records.
 void clearHttpServerSocketBookkeeping() {
   for (uint8_t socketNumber = 0; socketNumber < MAX_SOCK_NUM; ++socketNumber)
     EthernetServer::server_port[socketNumber] = 0;
 }
 
+// Closes every W5500 socket currently owned by the HTTP server.
 void stopHttpServerSockets() {
   for (uint8_t socketNumber = 0; socketNumber < MAX_SOCK_NUM; ++socketNumber) {
     if (EthernetServer::server_port[socketNumber] != HTTP_PORT)
@@ -739,6 +774,7 @@ void stopHttpServerSockets() {
   }
 }
 
+// Marks Ethernet offline and closes its services when the controller can respond.
 void stopEthernetServices(const bool controllerResponsive) {
   ethernetOnline = false;
   if (controllerResponsive) {
@@ -749,6 +785,7 @@ void stopEthernetServices(const bool controllerResponsive) {
   ntpSocketNumber = MAX_SOCK_NUM;
 }
 
+// Applies the active network configuration and verifies the resulting W5500 state.
 bool applyEthernetConfiguration() {
   appliedEthernetConfigurationValid = false;
   if (activeEthernetDhcp) {
@@ -776,6 +813,7 @@ bool applyEthernetConfiguration() {
   return isW5500Responsive() && ethernetConfigurationIsValid();
 }
 
+// Starts the NTP and HTTP listeners and reports whether both are ready.
 bool startEthernetServices() {
   const bool ntpReady = firmwareUpdateMaintenanceActive || bindNtpUdpSocket();
   if (!httpSocketIsHealthy())
@@ -784,6 +822,7 @@ bool startEthernetServices() {
   return ntpReady && httpReady;
 }
 
+// Records successful Ethernet startup and publishes the active network status.
 void ethernetServicesAreOnline() {
   const bool firstSuccessfulStartup = !ethernetEverOnline;
   ethernetOnline = true;
@@ -815,6 +854,7 @@ void ethernetServicesAreOnline() {
   addLog("Ethernet services online at " + strLocalIp);
 }
 
+// Places the Ethernet state machine into its link-waiting state with a status message.
 void waitForEthernetLink(const char* message) {
   ethernetOnline = false;
   ntpUdpBound = false;
@@ -825,6 +865,7 @@ void waitForEthernetLink(const char* message) {
   Serial.println(message);
 }
 
+// Restarts the Teensy after repeated W5500 recovery attempts are exhausted.
 void restartTeensyAfterEthernetFailure() {
   Serial.println("ERROR: W5500 recovery failed repeatedly; restarting Teensy");
   Serial.flush();
@@ -835,6 +876,7 @@ void restartTeensyAfterEthernetFailure() {
   }
 }
 
+// Schedules a W5500 hardware reset for the specified recovery reason.
 void requestW5500Reset(const char* reason) {
   ethernetOnline = false;
   ntpUdpBound = false;
@@ -853,6 +895,7 @@ void requestW5500Reset(const char* reason) {
                         incrementEthernetAttempt(w5500ResetAttempts));
 }
 
+// Escalates an Ethernet service failure to reconfiguration or hardware reset.
 void requestEthernetServiceRecovery(const char* reason) {
   ethernetOnline = false;
   ethernetRecoveryReason = reason;
@@ -867,6 +910,7 @@ void requestEthernetServiceRecovery(const char* reason) {
 
 } // namespace
 
+// Starts socket-level Ethernet recovery and optionally marks the NTP socket failed.
 void requestEthernetSocketRecovery(const char* reason, const bool ntpSocketFailed) {
   if (ntpSocketFailed) {
     ntpUdpBound = false;
@@ -891,6 +935,7 @@ void requestEthernetSocketRecovery(const char* reason, const bool ntpSocketFaile
   Serial.println(reason);
 }
 
+// Enters or leaves firmware-update maintenance while releasing or restoring NTP service.
 void setFirmwareUpdateMaintenance(const bool active) {
   firmwareUpdateMaintenanceActive = active;
   if (active) {
@@ -911,6 +956,7 @@ void setFirmwareUpdateMaintenance(const bool active) {
   setEthernetState(EthernetServiceState::RepairSockets);
 }
 
+// Schedules a validated firmware image for installation after the upload response is sent.
 void installFirmwareUpdate() {
   if (!firmwareUpdater.readyToInstall()) {
     recordError("Validated firmware was not ready when installation was requested");
@@ -925,6 +971,7 @@ void installFirmwareUpdate() {
   firmwareInstallRequestedMillis = millis();
 }
 
+// Installs and boots a pending firmware image after the response grace period expires.
 void serviceFirmwareInstall() {
   if (!firmwareInstallPending ||
       static_cast<uint32_t>(millis() - firmwareInstallRequestedMillis) <
@@ -941,6 +988,7 @@ void serviceFirmwareInstall() {
   firmwareUpdater.installAndReboot();
 }
 
+// Initializes W5500 pins and begins the nonblocking Ethernet startup sequence.
 void initializeEthernetService() {
   // Set inactive levels before changing the pins to outputs to avoid reset or
   // chip-select glitches during startup.
@@ -973,6 +1021,7 @@ void initializeEthernetService() {
   Serial.println("W5500 reset released; Ethernet startup will continue in loop");
 }
 
+// Advances the nonblocking Ethernet startup, monitoring, and recovery state machine.
 void serviceEthernet() {
   const uint32_t now = millis();
 
@@ -1265,6 +1314,7 @@ void serviceEthernet() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Schedules deferred I2C initialization and begins capturing GNSS time pulses.
 void initializePeripheralServices() {
   const uint32_t now = millis();
   // Ethernet begins immediately. Give cold-powered I2C peripherals time to
@@ -1285,6 +1335,7 @@ void initializePeripheralServices() {
   attachInterrupt(digitalPinToInterrupt(TIME_PULSE_PIN), timePulseInterrupt, RISING);
 }
 
+// Retries RTC discovery and configuration before requesting its startup synchronization.
 void serviceRtcInitialization() {
   if (rtcAvailable)
     return;
@@ -1318,7 +1369,8 @@ void serviceRtcInitialization() {
   RtcDateTime initialRtcTime = {};
   const bool modeVerified = readRtcRegisters(RV1805_CTRL1, &control1, 1) &&
                             (control1 & (1U << CTRL1_12_24)) == 0;
-  const RtcTimestampReadStatus initialTimeStatus = readRtcDateTime(&initialRtcTime);
+  const RtcTimestampReadStatus initialTimeStatus =
+      readRtcDateTime(&initialRtcTime);
   if (!modeVerified ||
       initialTimeStatus == RtcTimestampReadStatus::TransportFailure) {
     noteI2cInitializationResult(false);
@@ -1334,7 +1386,10 @@ void serviceRtcInitialization() {
   rtcReadErrorReported = initialTimeStatus == RtcTimestampReadStatus::InvalidTimestamp;
   if (rtcReadErrorReported)
     recordError("RTC contained an invalid timestamp; waiting for UTC TP1 synchronization");
-  setRtc();
+  if (!rtcStartupSynchronizationRequested) {
+    rtcStartupSynchronizationRequested = true;
+    setRtc();
+  }
 
   if (rtcInitializationFailureReported)
     addLog("Real time clock recovered after startup retry");
@@ -1343,6 +1398,7 @@ void serviceRtcInitialization() {
   rtcInitializationFailureReported = false;
 }
 
+// Applies live display settings and initializes the OLED only while it is enabled.
 void serviceDisplayInitialization() {
   const bool displayEnabled = properties.getDisplayOn() == 1;
   const bool displayAlternate = properties.getDisplayAlternate() == 1;
@@ -1405,6 +1461,7 @@ void serviceDisplayInitialization() {
   oledInitializationFailureReported = false;
 }
 
+// Advances the nonblocking GNSS detection and configuration sequence with retries.
 void serviceGnssInitialization() {
   if (gnssReady)
     return;
@@ -1615,8 +1672,6 @@ void serviceGnssInitialization() {
       getDeviceConfig();
       suppressDetailedGnssConfigQueries = false;
       requestPpsTimebaseAcquisition();
-      if (rtcAvailable)
-        setRtc();
       return;
   }
 }
@@ -1624,6 +1679,7 @@ void serviceGnssInitialization() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Initializes settings, buses, networking, and peripheral startup state at boot.
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(115200);
@@ -1676,6 +1732,7 @@ void setup() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Continuously services networking, timing, peripherals, and scheduled status updates.
 void loop() {
   // Once the browser has had time to load '/', begin the non-returning flash
   // replacement before making any further peripheral or network calls.
@@ -1750,7 +1807,8 @@ void loop() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Returns the final size of configLog.  configLog needs to be a minimum of 1024 chars.
-void getDeviceConfig() { // configLog is a global variable
+// Rebuilds the configuration snapshot displayed by the web interface.
+void getDeviceConfig() {
   configLog = String(APP_NAME) + " v" + String(VERSION);
   configLog += "\ncopyright (c) 2026 " + String(AUTHOR);
   configLog += "\n\nServer Name        : " + properties.getServerName();
@@ -1858,6 +1916,7 @@ void getDeviceConfig() { // configLog is a global variable
   }
 }
 
+// Copies a NAV-PVT report into the shared GNSS status cache.
 void cacheNavPvtData(const UBX_NAV_PVT_data_t& data) {
   GnssStatusSnapshot snapshot = {};
   snapshot.receivedMillis = millis();
@@ -1879,14 +1938,13 @@ void cacheNavPvtData(const UBX_NAV_PVT_data_t& data) {
   gnssStatusDirty = true;
 }
 
-// SparkFun's setAutoPVTcallbackPtr requires this exact mutable-pointer callback
-// signature, although this callback treats the supplied report as read-only.
-// NOLINTNEXTLINE(readability-non-const-parameter)
+// NOLINTNEXTLINE(readability-non-const-parameter): Caches each mutable NAV-PVT report supplied by SparkFun.
 void navPvtCallback(UBX_NAV_PVT_data_t* data) {
   if (data != nullptr)
     cacheNavPvtData(*data);
 }
 
+// Refreshes the displayed GNSS fix state when cached data or freshness changes.
 void serviceCachedGnssStatus() {
   GnssStatusSnapshot snapshot = {};
   const bool hasSnapshot = gnssStatusCache.get(&snapshot);
@@ -1911,6 +1969,7 @@ void serviceCachedGnssStatus() {
   gnssStatusWasFresh = isFresh;
 }
 
+// Programs the TP1 frequency, pulse length, and user delay settings.
 bool configureTimePulseTiming() {
   // Configure both the unlocked and locked signals. UTC validity is checked
   // through UBX-TIM-TP before TP1 is accepted as the NTP timebase.
@@ -1927,6 +1986,7 @@ bool configureTimePulseTiming() {
   return timingConfigured;
 }
 
+// Programs TP1 enablement, UTC alignment, polarity, and pulse-definition controls.
 bool configureTimePulseControls() {
   bool controlsConfigured = myGNSS.newCfgValset(VAL_LAYER_RAM_BBR);
   if (controlsConfigured) {
@@ -1944,6 +2004,7 @@ bool configureTimePulseControls() {
   return controlsConfigured;
 }
 
+// Validates a TIM-TP report and converts its GPS label into normalized UTC.
 bool timTpToUtc(const UBX_TIM_TP_data_t& pulse, NormalizedTimestamp* utc) {
   if (utc == nullptr || pulse.flags.bits.timeBase != 1 || pulse.flags.bits.utc != 1 ||
       pulse.week == 0 || pulse.towMS >= SECONDS_PER_WEEK * 1000ULL)
@@ -1962,6 +2023,7 @@ bool timTpToUtc(const UBX_TIM_TP_data_t& pulse, NormalizedTimestamp* utc) {
          pulseTime.getYear() >= 2026 && pulseTime.getYear() <= 2099;
 }
 
+// Reports whether two timestamps differ by no more than the TIM-TP tolerance.
 bool timestampsAreNear(const NormalizedTimestamp& left, const NormalizedTimestamp& right) {
   const int64_t secondsDifference = left.secondsSince1900 - right.secondsSince1900;
   if (secondsDifference < -1 || secondsDifference > 1)
@@ -1974,6 +2036,7 @@ bool timestampsAreNear(const NormalizedTimestamp& left, const NormalizedTimestam
   return nanosecondsDifference <= TIMTP_LABEL_TOLERANCE_NANOSECONDS;
 }
 
+// Queues a decoded UTC label for association with its captured TP1 edge.
 void queueTimTpTarget(const uint32_t pulseCount, const NormalizedTimestamp& utc) {
   timTpTargetPulseCount = pulseCount;
   timTpTargetUtc = utc;
@@ -1983,6 +2046,7 @@ void queueTimTpTarget(const uint32_t pulseCount, const NormalizedTimestamp& utc)
   validTimTpSeen = true;
 }
 
+// Resets the PPS clock and all related TIM-TP freshness state.
 void invalidatePpsTimebase() {
   ppsClock.reset();
   timTpTargetPending = false;
@@ -1995,6 +2059,7 @@ void invalidatePpsTimebase() {
   interrupts();
 }
 
+// Drains queued GNSS traffic and discards TIM-TP data preceding a fresh boundary.
 void drainGnssBeforeTimTpBoundary() {
   // Drain the shared stream so NAV-PVT callbacks keep advancing, then discard
   // every TIM-TP label parsed before a clean TP1 freshness boundary.
@@ -2002,6 +2067,7 @@ void drainGnssBeforeTimTpBoundary() {
   myGNSS.flushTIMTP();
 }
 
+// Begins the nonblocking sequence for establishing a fresh automatic TIM-TP stream.
 void requestPpsTimebaseAcquisition() {
   if (!gnssReady || ppsTimebaseAcquisitionState != PpsTimebaseAcquisitionState::Idle)
     return;
@@ -2016,6 +2082,7 @@ void requestPpsTimebaseAcquisition() {
   ppsAcquisitionStateStartedMillis = millis();
 }
 
+// Records a PPS acquisition failure and escalates repeated failures to GNSS reinitialization.
 void failPpsTimebaseAcquisition(const char* reason) {
   timTpAutomaticEnabled = false;
   ppsTimebaseAcquisitionState = PpsTimebaseAcquisitionState::Idle;
@@ -2042,6 +2109,7 @@ void failPpsTimebaseAcquisition(const char* reason) {
       backoffAttempt);
 }
 
+// Advances the state machine that establishes and verifies automatic TIM-TP output.
 void servicePpsTimebaseAcquisition() {
   switch (ppsTimebaseAcquisitionState) {
     case PpsTimebaseAcquisitionState::Idle:
@@ -2140,6 +2208,7 @@ void servicePpsTimebaseAcquisition() {
   }
 }
 
+// Updates the PPS clock from the latest captured edge and any queued TIM-TP label.
 void updatePpsClockFromPulse() {
   uint32_t pulseCount = 0;
   uint32_t intervalMicros = 0;
@@ -2188,6 +2257,7 @@ void updatePpsClockFromPulse() {
   }
 }
 
+// Retrieves a coherent PPS anchor that remains unchanged across validation snapshots.
 bool getCoherentPpsAnchor(uint32_t* pulseCount,
                           uint32_t* edgeMicros,
                           uint32_t* intervalMicros,
@@ -2216,6 +2286,7 @@ bool getCoherentPpsAnchor(uint32_t* pulseCount,
   return false;
 }
 
+// Services acquisition, validation, and maintenance of the PPS-derived UTC timebase.
 void servicePpsTimebase() {
   updatePpsClockFromPulse();
 
@@ -2465,6 +2536,7 @@ void servicePpsTimebase() {
   }
 }
 
+// Converts a captured microsecond value into a validated PPS-derived UTC timestamp.
 bool getPpsTimestamp(const uint32_t captureMicros, NormalizedTimestamp* timestamp) {
   if (timestamp == nullptr || !ppsClockConfirmed || !validTimTpSeen ||
       static_cast<uint32_t>(millis() - lastValidTimTpMillis) > TIMTP_STALE_MILLIS)
@@ -2486,6 +2558,7 @@ bool getPpsTimestamp(const uint32_t captureMicros, NormalizedTimestamp* timestam
   return ppsClock.timestampAt(captureMicros, timestamp);
 }
 
+// Configures and verifies the RTC crystal oscillator for fractional-second operation.
 bool configureRtcXtOscillator() {
   // SparkFun's begin() selects the low-power RC oscillator. The RV1805
   // hundredths counter is valid only while the 32.768 kHz XT oscillator runs.
@@ -2525,6 +2598,7 @@ bool configureRtcXtOscillator() {
          (rtc.readRegister(RV1805_OSC_STATUS) & RTC_OSCILLATOR_MODE_RC_MASK) == 0;
 }
 
+// Captures each TP1 rising edge and its interval for later timebase processing.
 void timePulseInterrupt() {
   const uint32_t edgeMicros = micros();
   const uint32_t previousEdgeMicros = timePulseEdgeMicros;
@@ -2540,6 +2614,7 @@ void timePulseInterrupt() {
   timePulseCount = newPulseCount;
 }
 
+// Copies the volatile TP1 capture state while interrupts are temporarily disabled.
 void getTimePulseStatus(uint32_t* pulseCount,
                         uint32_t* intervalMicros,
                         uint32_t* edgeMicros,
@@ -2554,6 +2629,7 @@ void getTimePulseStatus(uint32_t* pulseCount,
   interrupts();
 }
 
+// Reports selected TP1 pulse intervals to the serial console for diagnostics.
 void reportTimePulse() {
   static uint32_t reportedPulseCount = 0;
   static uint8_t initialReportsRemaining = 5;
@@ -2583,12 +2659,16 @@ void reportTimePulse() {
   }
 }
 
+// Requests an RTC update on the next valid labelled UTC pulse.
 void setRtc() {
   // This is intentionally a request, not an immediate write. The RTC is written
   // once at the next labelled UTC pulse, then free-runs until another request.
   if (rtcSyncState != RtcSyncState::Idle)
     return;
 
+  // Consume the configured interval when its request is accepted so a failed
+  // synchronization cannot immediately re-arm on every loop iteration.
+  rtcSetTimerMs = 0;
   uint32_t pulseCount = 0;
   uint32_t intervalMicros = 0;
   getTimePulseStatus(&pulseCount, &intervalMicros);
@@ -2597,6 +2677,7 @@ void setRtc() {
   rtcSyncState = RtcSyncState::WaitForPulse;
 }
 
+// Records a synchronization error only once until the error latch is cleared.
 void reportRtcSyncErrorOnce(const String& error) {
   if (!rtcSyncErrorReported) {
     rtcSyncErrorReported = true;
@@ -2604,9 +2685,13 @@ void reportRtcSyncErrorOnce(const String& error) {
   }
 }
 
+// Writes UTC from a captured TP1 edge with write-delay compensation.
 bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
                              const NormalizedTimestamp& utcAtEdge,
                              TimeData* writtenTime) {
+  if (writtenTime == nullptr)
+    return false;
+
   const uint32_t elapsedMicros = micros() - capturedEdgeMicros;
   if (elapsedMicros > RTC_CAPTURE_MAX_AGE_MICROS)
     return false;
@@ -2623,9 +2708,10 @@ bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
   if (writtenTime->getYear() < 2000 || writtenTime->getYear() > 2099)
     return false;
 
-  // The RV1805 stores one-based weekdays with Sunday == 1. 1900-01-01 was Monday.
+  // The RV1805 stores weekdays as Sunday == 0 through Saturday == 6.
+  // 1900-01-01 was Monday.
   const uint64_t daysSince1900 = secondsSince1900 / 86400ULL;
-  const uint8_t weekday = static_cast<uint8_t>(((daysSince1900 + 1ULL) % 7ULL) + 1ULL);
+  const uint8_t weekday = static_cast<uint8_t>((daysSince1900 + 1ULL) % 7ULL);
   const uint8_t hundredths = static_cast<uint8_t>(effectiveNanoseconds / 10000000ULL);
 
   // Use the array overload to perform one I2C burst. The scalar overload first
@@ -2642,13 +2728,16 @@ bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
   };
 
   const uint32_t writeStartedMicros = micros();
-  const bool writeSucceeded = rtc.setTime(rtcTime, sizeof(rtcTime));
+  const bool writeSucceeded = rtc.setTime(
+      rtcTime,
+      static_cast<uint8_t>(std::size(rtcTime)));
   const uint32_t measuredWriteMicros = micros() - writeStartedMicros;
   if (writeSucceeded && measuredWriteMicros > 0 && measuredWriteMicros < 10000)
     rtcWriteMicros = measuredWriteMicros;
   return writeSucceeded;
 }
 
+// Completes a pending RTC synchronization when a valid labelled TP1 edge arrives.
 void serviceRtcSync() {
   if (rtcSyncState == RtcSyncState::Idle)
     return;
@@ -2696,10 +2785,14 @@ void serviceRtcSync() {
 
   rtcSyncState = RtcSyncState::Idle;
   rtcSyncErrorReported = false;
+  rtcReadErrorReported = false;
   rtcSetTimerMs = 0;
-  addLog(String("Set RTC from UTC TP1 pulse: ") + writtenTime.getISO8601Time(2));
+  const String writtenTimestamp = writtenTime.getISO8601Time(2);
+  appendTimestampedLog(writtenTimestamp,
+                       String("Set RTC from UTC TP1 pulse: ") + writtenTimestamp);
 }
 
+// Reads and formats the current RTC time when its complete register burst is valid.
 String getRtcISO8601Time() {
   if (!rtcAvailable)
     return String("");
@@ -2717,11 +2810,9 @@ String getRtcISO8601Time() {
     return String("");
   }
   if (status == RtcTimestampReadStatus::InvalidTimestamp) {
-    if (rtcSyncState == RtcSyncState::Idle)
-      setRtc();
     if (!rtcReadErrorReported) {
       rtcReadErrorReported = true;
-      recordRtcTimestampError("RTC returned an invalid timestamp; waiting for UTC TP1 synchronization");
+      recordRtcTimestampError("RTC returned an invalid timestamp; waiting for the next scheduled synchronization");
     }
     return String("");
   }
@@ -2737,6 +2828,7 @@ String getRtcISO8601Time() {
                          2);
 }
 
+// Returns web-formatted RTC time with a note when fractional time is unavailable.
 String getRtcWebISO8601Time() {
   uint8_t oscillatorStatus = 0;
   const bool oscillatorStatusRead =
@@ -2758,6 +2850,7 @@ String getRtcWebISO8601Time() {
   return rtcTime + " (fraction unavailable: RTC using RC oscillator)";
 }
 
+// Binds the NTP UDP socket and records whether the resulting socket is usable.
 bool bindNtpUdpSocket() {
   if (ntpUdpBound)
     udp.stop();
@@ -2784,6 +2877,7 @@ bool bindNtpUdpSocket() {
   return true;
 }
 
+// Drains the current UDP datagram or requests socket recovery if draining fails.
 bool discardCurrentUdpPacket() {
   uint8_t discardBuffer[32];
   while (udp.available() > 0) {
@@ -2803,6 +2897,7 @@ bool discardCurrentUdpPacket() {
   return true;
 }
 
+// Validates an NTP request, creates its response, and transmits it to the client.
 void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros) {
   const IPAddress remoteIp = udp.remoteIP();
   const uint16_t remotePort = udp.remotePort();
@@ -2934,6 +3029,7 @@ constexpr char ENTRY_TIMESTAMP_PLACEHOLDER[] = "____-__-__T__:__:__.__";
 static_assert(sizeof(ENTRY_TIMESTAMP_PLACEHOLDER) - 1 == 22,
               "Entry timestamp placeholder must match YYYY-MM-DDTHH:MM:SS.hh");
 
+// Formats the current PPS-derived UTC time with the requested decimal precision.
 String getPpsISO8601Time(const uint8_t decimalPrecision) {
   NormalizedTimestamp timestamp = {};
   if (!getPpsTimestamp(micros(), &timestamp) ||
@@ -2949,6 +3045,7 @@ String getPpsISO8601Time(const uint8_t decimalPrecision) {
   return gpsTime.getISO8601Time(decimalPrecision);
 }
 
+// Returns PPS-derived time or a fixed-width placeholder when time is unavailable.
 String getFallbackISO8601Time() {
   String timestamp = getPpsISO8601Time(2);
   if (timestamp.length() == 0)
@@ -2956,6 +3053,7 @@ String getFallbackISO8601Time() {
   return timestamp;
 }
 
+// Selects RTC time first and falls back to PPS time for log and error entries.
 String getEntryISO8601Time() {
   String timestamp = getRtcISO8601Time();
   if (timestamp.length() == 0)
@@ -2963,6 +3061,16 @@ String getEntryISO8601Time() {
   return timestamp;
 }
 
+// Adds a pre-timestamped message to the bounded usage log.
+void appendTimestampedLog(const String& timestamp, const String& log) {
+  if (properties.getLogMax() == 0)
+    return;
+  if (static_cast<uint16_t>(usageLog.size()) >= properties.getLogMax())
+    usageLog.pop_back();
+  usageLog.push_front(timestamp + " - " + log);
+}
+
+// Adds an error string to the bounded error log and serial output.
 void appendTimestampedError(String error) {
   if (properties.getErrorMax() == 0) {
     Serial.println(error);
@@ -2974,6 +3082,7 @@ void appendTimestampedError(String error) {
   Serial.println(error);
 }
 
+// Records an RTC-originated error with PPS time to avoid recursive RTC reads.
 void recordRtcTimestampError(String error) {
   // RTC acquisition generated this error, so retrying the RTC to timestamp it
   // would recurse. PPS and the fixed placeholder are the remaining two steps
@@ -2983,28 +3092,27 @@ void recordRtcTimestampError(String error) {
 
 } // namespace
 
+// Returns the current GPS/PPS-derived UTC time with microsecond precision.
 String getGpsISO8601Time() {
   return getPpsISO8601Time(6);
 }
 
+// Adds a timestamped message to the usage log.
 void addLog(String log) {
-  if (properties.getLogMax() == 0)
-    return;
-  if (static_cast<uint16_t>(usageLog.size()) >= properties.getLogMax()) {
-    usageLog.pop_back();
-  }
-  usageLog.push_front(getEntryISO8601Time() + " - " + log);
+  appendTimestampedLog(getEntryISO8601Time(), log);
 }
 
+// Adds an error through the standard timestamping path.
 void addError(String error) {
   recordError(error);
 }
 
+// Prefixes an error with the best available timestamp and stores it.
 void recordError(String error) {
   appendTimestampedError(getEntryISO8601Time() + " - " + error);
 }
 
-// Display text on the OLED screen
+// Renders current GPS and network status on the OLED when the display is enabled.
 void displaySettings() {
   if (!oledAvailable || properties.getDisplayOn() != 1)
     return;

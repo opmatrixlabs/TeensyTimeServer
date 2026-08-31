@@ -25,6 +25,7 @@ namespace {
 constexpr uint64_t NANOSECONDS_PER_SECOND = 1000000000ULL;
 }
 
+// Clears the PPS anchor and restores the default pulse-interval estimate.
 void PpsClock::reset() {
   anchored_ = false;
   intervalDisciplined_ = false;
@@ -34,6 +35,7 @@ void PpsClock::reset() {
   utcAtEdge_ = {};
 }
 
+// Associates a captured PPS edge with its corresponding normalized UTC timestamp.
 bool PpsClock::setAnchor(const uint32_t pulseCount,
                          const uint32_t edgeMicros,
                          const NormalizedTimestamp& utcAtEdge) {
@@ -47,6 +49,7 @@ bool PpsClock::setAnchor(const uint32_t pulseCount,
   return true;
 }
 
+// Validates a labeled PPS observation and uses it to establish or refresh the UTC anchor.
 bool PpsClock::setLabelledPulse(const uint32_t pulseCount,
                                 const uint32_t edgeMicros,
                                 const uint32_t intervalMicros,
@@ -68,6 +71,7 @@ bool PpsClock::setLabelledPulse(const uint32_t pulseCount,
   return setAnchor(pulseCount, edgeMicros, utcAtEdge);
 }
 
+// Advances the UTC anchor to a later valid PPS edge while refining the measured interval.
 bool PpsClock::advanceToPulse(const uint32_t pulseCount,
                               const uint32_t edgeMicros,
                               const uint32_t intervalMicros) {
@@ -111,6 +115,7 @@ bool PpsClock::advanceToPulse(const uint32_t pulseCount,
   return true;
 }
 
+// Interpolates a normalized UTC timestamp for a microsecond capture near the current PPS anchor.
 bool PpsClock::timestampAt(const uint32_t captureMicros, NormalizedTimestamp* timestamp) const {
   if (!anchored_ || timestamp == nullptr)
     return false;
@@ -129,6 +134,7 @@ bool PpsClock::timestampAt(const uint32_t captureMicros, NormalizedTimestamp* ti
   return true;
 }
 
+// Copies the current PPS anchor details to the caller when an anchor is available.
 bool PpsClock::getAnchor(uint32_t* pulseCount,
                          uint32_t* edgeMicros,
                          NormalizedTimestamp* utcAtEdge) const {
@@ -141,10 +147,12 @@ bool PpsClock::getAnchor(uint32_t* pulseCount,
   return true;
 }
 
+// Reports whether the clock currently has a valid PPS-to-UTC anchor.
 bool PpsClock::isAnchored() const {
   return anchored_;
 }
 
+// Reports whether a measured pulse interval falls within the accepted PPS timing range.
 bool PpsClock::isExpectedPulseInterval(const uint32_t intervalMicros) {
   return intervalMicros >= MIN_PULSE_INTERVAL_MICROS &&
          intervalMicros <= MAX_PULSE_INTERVAL_MICROS;

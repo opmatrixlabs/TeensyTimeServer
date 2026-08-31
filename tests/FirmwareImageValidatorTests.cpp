@@ -16,6 +16,7 @@ namespace {
 
 constexpr uint32_t FLASH_BASE = 0x60000000UL;
 
+// Writes a 32-bit value into the synthetic firmware image in little-endian byte order.
 void writeWord(std::vector<uint8_t>& image, const size_t offset, const uint32_t value) {
   image[offset] = static_cast<uint8_t>(value);
   image[offset + 1] = static_cast<uint8_t>(value >> 8);
@@ -23,10 +24,12 @@ void writeWord(std::vector<uint8_t>& image, const size_t offset, const uint32_t 
   image[offset + 3] = static_cast<uint8_t>(value >> 24);
 }
 
+// Copies a null-terminated text value into the synthetic firmware image at the specified offset.
 void writeText(std::vector<uint8_t>& image, const size_t offset, const char* value) {
   memcpy(image.data() + offset, value, strlen(value));
 }
 
+// Constructs a synthetic Teensy firmware image containing valid metadata and vector entries.
 std::vector<uint8_t> validSyntheticImage() {
   std::vector<uint8_t> image(0x2400, 0);
   writeWord(image, 0x0000, 0x42464346UL);
@@ -43,6 +46,7 @@ std::vector<uint8_t> validSyntheticImage() {
   return image;
 }
 
+// Verifies acceptance of valid firmware metadata and rejection of each tested corruption.
 void testValidAndInvalidMetadata() {
   const std::vector<uint8_t> valid = validSyntheticImage();
   assert(validateTeensyTimeServerImage(valid.data(), static_cast<uint32_t>(valid.size())).valid);
@@ -80,6 +84,7 @@ void testValidAndInvalidMetadata() {
   assert(!validateTeensyTimeServerImage(changed.data(), static_cast<uint32_t>(changed.size())).valid);
 }
 
+// Applies one parsed Intel HEX record to the reconstructed firmware image and tracking state.
 bool appendHexRecord(const IntelHexRecord& record,
                      uint32_t* extendedAddress,
                      uint32_t* expectedAddress,
@@ -119,6 +124,7 @@ bool appendHexRecord(const IntelHexRecord& record,
   }
 }
 
+// Parses and validates a generated Intel HEX firmware artifact from disk.
 void validateArtifact(const char* path) {
   std::ifstream input(path, std::ios::binary);
   assert(input.good());
@@ -153,6 +159,7 @@ void validateArtifact(const char* path) {
 
 } // namespace
 
+// Runs firmware image validation tests and optionally validates a supplied build artifact.
 int main(const int argc, char** argv) {
   testValidAndInvalidMetadata();
   if (argc == 2)
