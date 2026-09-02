@@ -97,7 +97,7 @@ void recordError(String error);
 void displaySettings();
 
 const char* APP_NAME = "GPS NTP Time Server";
-const char* VERSION = "3.1";
+const char* VERSION = "3.1.1";
 const char* AUTHOR = "Andrew Kevin Bailey";
 
 /**** Setup Properties init *****/
