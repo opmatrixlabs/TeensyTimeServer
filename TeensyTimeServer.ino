@@ -70,6 +70,7 @@ void servicePpsTimebase();
 void updatePpsClockFromPulse();
 bool getPpsTimestamp(uint32_t captureMicros, NormalizedTimestamp* timestamp);
 bool configureRtcXtOscillator();
+bool rtcSyncIntervalExpired();
 void setRtc();
 void serviceRtcSync();
 String getRtcISO8601Time();
@@ -188,13 +189,19 @@ bool rtcHundredthsAvailable = false;
 
 enum class RtcSyncState : uint8_t {
   Idle,
-  WaitForPulse
+  WaitForPulse,
+  RetryBackoff,
+  WaitForInterval
 };
 
 constexpr uint64_t GPS_EPOCH_SECONDS_SINCE_1900 = 2524953600ULL; // 1980-01-06T00:00:00Z
 constexpr uint64_t SECONDS_PER_WEEK = 604800ULL;
 constexpr uint32_t DEFAULT_RTC_WRITE_MICROS = 300;
 constexpr uint32_t RTC_CAPTURE_MAX_AGE_MICROS = 5000000;
+constexpr uint8_t RTC_SYNC_MAX_ATTEMPTS = 3;
+constexpr uint32_t RTC_SYNC_RETRY_MILLIS = 5000;
+constexpr uint8_t RTC_SYNC_VERIFY_READS = 3;
+constexpr int64_t RTC_SYNC_VERIFY_TOLERANCE_HUNDREDTHS = 2;
 // Keep the XT oscillator active on both VDD and backup power. The standby RC
 // oscillator is calibrated every 512 seconds and is used only if XT fails.
 constexpr uint8_t RTC_XT_STARTUP_MODE = 0b01100000;
@@ -205,6 +212,8 @@ constexpr uint32_t RTC_XT_START_TIMEOUT_MS = 500;
 constexpr uint32_t RTC_INITIALIZATION_RETRY_MILLIS = 5000;
 
 RtcSyncState rtcSyncState = RtcSyncState::Idle;
+uint8_t rtcSyncAttempts = 0;
+uint32_t rtcSyncStateStartedMillis = 0;
 uint32_t rtcReferencePulseCount = 0;
 uint32_t rtcWriteMicros = DEFAULT_RTC_WRITE_MICROS;
 bool rtcSyncErrorReported = false;
@@ -463,6 +472,38 @@ RtcTimestampReadStatus readRtcDateTime(RtcDateTime* timestamp) {
                                timestamp)
              ? RtcTimestampReadStatus::Success
              : RtcTimestampReadStatus::InvalidTimestamp;
+}
+
+// Verifies the written calendar time with bounded reads and hundredth-resolution tolerance.
+RtcTimestampReadStatus verifyRtcWrite(TimeData& writtenTime) {
+  const uint32_t verificationStartedMicros = micros();
+  const uint64_t writtenHundredths = writtenTime.secondsSince1900() * 100ULL +
+      static_cast<uint32_t>(writtenTime.getSubSec()) / 10000000U;
+  RtcTimestampReadStatus result = RtcTimestampReadStatus::TransportFailure;
+
+  for (uint8_t attempt = 0; attempt < RTC_SYNC_VERIFY_READS; ++attempt) {
+    RtcDateTime observed = {};
+    const RtcTimestampReadStatus status = readRtcDateTime(&observed);
+    if (status != RtcTimestampReadStatus::TransportFailure)
+      result = RtcTimestampReadStatus::InvalidTimestamp;
+    if (status == RtcTimestampReadStatus::Success) {
+      TimeData observedTime(observed.year, observed.month, observed.day,
+                            observed.hour, observed.minute, observed.second, 0);
+      const uint64_t observedHundredths = observedTime.secondsSince1900() * 100ULL +
+          observed.hundredths;
+      const uint64_t expectedHundredths = writtenHundredths +
+          static_cast<uint32_t>(micros() - verificationStartedMicros) / 10000U;
+      const int64_t difference = static_cast<int64_t>(observedHundredths) -
+          static_cast<int64_t>(expectedHundredths);
+      // Allow timestamp quantization and the short I2C read, including rollover.
+      if (difference >= -RTC_SYNC_VERIFY_TOLERANCE_HUNDREDTHS &&
+          difference <= RTC_SYNC_VERIFY_TOLERANCE_HUNDREDTHS)
+        return RtcTimestampReadStatus::Success;
+    }
+    if (attempt + 1 < RTC_SYNC_VERIFY_READS)
+      delay(1);
+  }
+  return result;
 }
 
 // Returns the bounded retry delay for the specified GNSS initialization attempt.
@@ -1796,11 +1837,8 @@ void loop() {
     }
   }
 
-  // To avoid having delays in loop, we'll use the strategy from BlinkWithoutDelay
-  // see: File -> Examples -> 02.Digital -> BlinkWithoutDelay for more info
-  const uint32_t rtcSetFrequencyMs = properties.getRtcSetFrequency();
-  // Zero disables periodic synchronization; the startup request still runs.
-  if (rtcAvailable && rtcSetFrequencyMs > 0 && rtcSetTimerMs >= rtcSetFrequencyMs) {
+  // Queue scheduled work even while the RTC is temporarily unavailable.
+  if (rtcSyncIntervalExpired()) {
     setRtc();
   }
 }
@@ -2659,16 +2697,27 @@ void reportTimePulse() {
   }
 }
 
+// Reports when a new periodic RTC synchronization may be requested.
+bool rtcSyncIntervalExpired() {
+  const uint32_t frequencyMillis = properties.getRtcSetFrequency();
+  if (frequencyMillis == 0)
+    return false;
+  if (rtcSyncState == RtcSyncState::WaitForInterval)
+    return hasElapsed(millis(), rtcSyncStateStartedMillis, frequencyMillis);
+  return rtcSyncState == RtcSyncState::Idle && rtcSetTimerMs >= frequencyMillis;
+}
+
 // Requests an RTC update on the next valid labelled UTC pulse.
 void setRtc() {
   // This is intentionally a request, not an immediate write. The RTC is written
-  // once at the next labelled UTC pulse, then free-runs until another request.
-  if (rtcSyncState != RtcSyncState::Idle)
+  // at a labelled UTC pulse, then free-runs until another request.
+  if (rtcSyncState != RtcSyncState::Idle &&
+      rtcSyncState != RtcSyncState::WaitForInterval)
     return;
 
-  // Consume the configured interval when its request is accepted so a failed
-  // synchronization cannot immediately re-arm on every loop iteration.
-  rtcSetTimerMs = 0;
+  // Only verified success restarts the normal interval; failed attempts use
+  // their own retry timer, and a manual request may override the failure cooldown.
+  rtcSyncAttempts = 0;
   uint32_t pulseCount = 0;
   uint32_t intervalMicros = 0;
   getTimePulseStatus(&pulseCount, &intervalMicros);
@@ -2681,7 +2730,7 @@ void setRtc() {
 void reportRtcSyncErrorOnce(const String& error) {
   if (!rtcSyncErrorReported) {
     rtcSyncErrorReported = true;
-    addError(error);
+    recordRtcTimestampError(error);
   }
 }
 
@@ -2737,13 +2786,22 @@ bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
   return writeSucceeded;
 }
 
-// Completes a pending RTC synchronization when a valid labelled TP1 edge arrives.
+// Services a pending pulse-aligned RTC synchronization with verification and bounded retries.
 void serviceRtcSync() {
-  if (rtcSyncState == RtcSyncState::Idle)
+  if (rtcSyncState == RtcSyncState::Idle ||
+      rtcSyncState == RtcSyncState::WaitForInterval)
     return;
+  if (rtcSyncState == RtcSyncState::RetryBackoff) {
+    if (!hasElapsed(millis(), rtcSyncStateStartedMillis, RTC_SYNC_RETRY_MILLIS))
+      return;
+    uint32_t intervalMicros = 0;
+    getTimePulseStatus(&rtcReferencePulseCount, &intervalMicros);
+    rtcSyncState = RtcSyncState::WaitForPulse;
+    rtcSyncErrorReported = false;
+    return;
+  }
   if (!rtcAvailable) {
-    reportRtcSyncErrorOnce("RTC synchronization unavailable: RTC was not detected");
-    rtcSyncState = RtcSyncState::Idle;
+    reportRtcSyncErrorOnce("RTC synchronization pending: waiting for RTC recovery");
     return;
   }
 
@@ -2774,12 +2832,24 @@ void serviceRtcSync() {
   }
 
   TimeData writtenTime;
-  if (!writeRtcAtCapturedPulse(edgeMicros, utcAtEdge, &writtenTime)) {
-    rtcAvailable = false;
-    rtcSyncState = RtcSyncState::Idle;
-    lastRtcInitializationAttemptMillis =
-        millis() - RTC_INITIALIZATION_RETRY_MILLIS;
-    reportRtcSyncErrorOnce("RTC synchronization write failed; reinitializing RTC");
+  ++rtcSyncAttempts;
+  const bool writeSucceeded = writeRtcAtCapturedPulse(edgeMicros, utcAtEdge, &writtenTime);
+  const RtcTimestampReadStatus verificationStatus = writeSucceeded
+      ? verifyRtcWrite(writtenTime) : RtcTimestampReadStatus::TransportFailure;
+  if (verificationStatus != RtcTimestampReadStatus::Success) {
+    if (verificationStatus == RtcTimestampReadStatus::TransportFailure) {
+      rtcAvailable = false;
+      lastRtcInitializationAttemptMillis =
+          millis() - RTC_INITIALIZATION_RETRY_MILLIS;
+    }
+    rtcSyncStateStartedMillis = millis();
+    const bool exhausted = rtcSyncAttempts >= RTC_SYNC_MAX_ATTEMPTS;
+    rtcSyncState = exhausted ? RtcSyncState::WaitForInterval : RtcSyncState::RetryBackoff;
+    recordRtcTimestampError(
+        String("RTC synchronization ") + (writeSucceeded ? "read-back verification" : "write") +
+        " failed (attempt " + String(rtcSyncAttempts) + "/" + String(RTC_SYNC_MAX_ATTEMPTS) +
+        (exhausted ? "); waiting for the next configured interval or manual Set RTC"
+                   : "); retrying after 5 seconds on a new UTC TP1 pulse"));
     return;
   }
 
@@ -2789,7 +2859,7 @@ void serviceRtcSync() {
   rtcSetTimerMs = 0;
   const String writtenTimestamp = writtenTime.getISO8601Time(2);
   appendTimestampedLog(writtenTimestamp,
-                       String("Set RTC from UTC TP1 pulse: ") + writtenTimestamp);
+                       String("Set RTC from UTC TP1 pulse (verified): ") + writtenTimestamp);
 }
 
 // Reads and formats the current RTC time when its complete register burst is valid.
