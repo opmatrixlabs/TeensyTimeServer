@@ -2758,7 +2758,6 @@ bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
     return false;
 
   // The RV1805 stores weekdays as Sunday == 0 through Saturday == 6.
-  // 1900-01-01 was Monday.
   const uint64_t daysSince1900 = secondsSince1900 / 86400ULL;
   const uint8_t weekday = static_cast<uint8_t>((daysSince1900 + 1ULL) % 7ULL);
   const uint8_t hundredths = static_cast<uint8_t>(effectiveNanoseconds / 10000000ULL);
