@@ -74,9 +74,9 @@ See [PPS_Upgrade.md](PPS_Upgrade.md) for additional background and signal-routin
 
 The ZED-F9T TP1 output is routed to RXI, captured on Teensy pin `0`, and associated with a validated `UBX-TIM-TP` UTC data to control the NTP clock. Using the hardware rising edge as the precise second boundary avoids variable I2C polling and message-arrival latency, producing more stable and accurate NTP timestamps.
 
-### NTP clock precision target: 2^-20 seconds
+### NTP clock precision of 2^-20 seconds
 
-Version 3.2.1 targets an NTP clock precision of `-20`, equivalent to approximately 0.954 microseconds. Precision describes local clock resolution and clock-read cost; it does not specify network latency or client synchronization accuracy.
+Teensy Time Server targets an NTP clock precision of `-20`, equivalent to approximately 0.954 microseconds. Precision describes local clock resolution and clock-read cost; it does not specify network latency or client synchronization accuracy.
 
 - PPS edges are latched by the existing pin's FlexPWM capture hardware. At the normal 600 MHz CPU / 150 MHz bus configuration, timer resolution is approximately 6.67 ns. Interrupt-entry latency does not set the captured edge time.
 - The clock retains fractional timer ticks while estimating the number of ticks per GPS second. This avoids the former whole-microsecond averaging deadband.
@@ -85,18 +85,6 @@ Version 3.2.1 targets an NTP clock precision of `-20`, equivalent to approximate
 - The capture driver extends timer rollovers and rejects ambiguous pulse captures. It checks for timer continuity and CPU/bus clock changes. A continuity fault leaves NTP unsynchronized until restart. Changing clocks or using another PWM/capture library on FlexPWM1 submodule 1 is unsupported while this clock is active.
 
 The **GPS-Time Config** page and startup logs report the timer frequency, measured clock-read cycles, precision exponent, and whether the target was met. No synchronized response is sent before the precision measurement completes. The nanosecond timer resolution is not a claim of nanosecond absolute UTC accuracy.
-
-#### Verification
-
-Run the host regression suites with `powershell -File tests\RunTests.ps1`. They cover fractional clock correction, capture and counter rollover, timestamp conversion, NTP precision encoding, and the existing firmware behavior.
-
-After installing the new firmware and allowing GPS synchronization, query the appliance:
-
-```powershell
-python -B tests/ProbeNtp.py 10.100.100.12 --samples 5
-```
-
-Successful synchronized replies should report `leap: 0`, `stratum: 1`, and `precision_exponent: -20`. Check the device's clock-read measurement as well; a packet's precision byte alone does not prove timing performance. The probe makes ordinary NTP requests and does not change the client clock.
 
 ### Ethernet glitch handling
 
