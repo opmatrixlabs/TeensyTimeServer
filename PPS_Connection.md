@@ -44,18 +44,13 @@ Configure TP1 explicitly for:
 
 The ZED-F9T factory TP1 configuration is nominally 1 Hz but uses the GPS time grid, so the UTC time grid must be selected explicitly for the NTP application.
 
-## Firmware Entry Point
+## Firmware Capture
 
-The eventual GPIO configuration would be similar to:
+Version 3.2.0 uses `PpsCapture::begin()` to configure the existing pin `0` as the FlexPWM1 submodule 1 X capture input. No wire needs to move. The timer latches the rising edge before the interrupt handler runs, and the clock interpolates UTC using that same timer's ticks. At the default CPU/bus clock settings, each tick is approximately 6.67 ns.
 
-```cpp
-constexpr uint8_t PPS_PIN = 0;
+The pin remains a high-impedance input without a pull-up because TP1 is actively driven. The interrupt handler maintains the counter and pulse state; it performs no I2C, logging, or NTP packet construction. Timer and capture rollover handling is covered by host tests. Do not assign this timer submodule to another PWM or capture library, or change CPU/bus clocks while it is active.
 
-pinMode(PPS_PIN, INPUT);
-attachInterrupt(digitalPinToInterrupt(PPS_PIN), ppsInterrupt, RISING);
-```
-
-Use `INPUT`, not `INPUT_PULLUP`, because TP1 is actively driven. The interrupt handler should capture a hardware counter or timestamp and return immediately. It should not perform I2C transactions, logging, or NTP packet construction.
+The firmware measures its full clock-read cost after UTC synchronization and advertises an NTP precision of `-20` only when the measured cost and resolution support it. See the README's precision section for verification steps.
 
 The carrier's UART multiplexer and wiring add a small, mostly fixed propagation delay. This is far smaller and more repeatable than the timing uncertainty from polling the GNSS over I2C. It can be measured and compensated later if absolute sub-microsecond calibration is required.
 

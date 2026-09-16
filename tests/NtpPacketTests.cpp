@@ -67,7 +67,7 @@ void testVersionPollOriginAndTimestamps() {
     assert(response[0] == static_cast<uint8_t>((version << 3) | 4));
     assert(response[1] == 1);
     assert(response[2] == 0xFA);
-    assert(response[3] == 0xF7);
+    assert(response[3] == 0xEC); // Signed NTP precision exponent -20.
     assert(response[11] == 0x50);
     assert(response[12] == 'G');
     assert(response[13] == 'P');
@@ -81,6 +81,19 @@ void testVersionPollOriginAndTimestamps() {
     assertBytesEqual(response + 16, expectedReference, sizeof(expectedReference));
     assertBytesEqual(response + 32, expectedReceive, sizeof(expectedReceive));
     assertBytesEqual(response + 40, expectedTransmit, sizeof(expectedTransmit));
+  }
+}
+
+// Verifies that a measured coarser clock precision reaches the signed wire field.
+void testMeasuredPrecision() {
+  uint8_t request[NTP_PACKET_SIZE] = {};
+  initializeRequest(request, 4, 6);
+  uint8_t response[NTP_PACKET_SIZE] = {};
+  const int8_t precisions[] = {NTP_TARGET_PRECISION, -19, -9, 0, 1, 32};
+  for (const int8_t precision : precisions) {
+    assert(createNtpResponse(request, NTP_PACKET_SIZE, {}, {}, {}, true,
+                             response, sizeof(response), precision) == NtpResponseStatus::Ready);
+    assert(response[3] == static_cast<uint8_t>(precision));
   }
 }
 
@@ -127,7 +140,7 @@ void testUnsynchronizedResponse() {
 
   uint8_t response[NTP_PACKET_SIZE];
   memset(response, 0xA5, sizeof(response));
-  assert(createNtpResponse(request, NTP_PACKET_SIZE, {}, {}, {}, false, response, sizeof(response)) ==
+  assert(createNtpResponse(request, NTP_PACKET_SIZE, {}, {}, {}, false, response, sizeof(response), -19) ==
          NtpResponseStatus::Ready);
 
   assert(response[0] == static_cast<uint8_t>(0xC0 | (4 << 3) | 4));
@@ -167,6 +180,7 @@ void testSmallOutputBufferDoesNotModifyResponse() {
 // Runs all NTP packet unit tests and reports success through the process exit code.
 int main() {
   testVersionPollOriginAndTimestamps();
+  testMeasuredPrecision();
   testInvalidRequestsDoNotModifyResponse();
   testUnsynchronizedResponse();
   testSmallOutputBufferDoesNotModifyResponse();

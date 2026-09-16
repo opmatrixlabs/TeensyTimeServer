@@ -25,25 +25,44 @@ namespace {
 constexpr uint64_t NANOSECONDS_PER_SECOND = 1000000000ULL;
 }
 
+// Accepts counter rates whose interpolation window fits within one 32-bit wrap.
+PpsClock::PpsClock(const uint32_t ticksPerSecond) : ticksPerSecond_(ticksPerSecond) {
+  const uint64_t maximumInterpolationTicks =
+      static_cast<uint64_t>(ticksPerSecond) * MAX_INTERPOLATION_MICROS / 1000000U;
+  tickRateValid_ = ticksPerSecond != 0 && maximumInterpolationTicks <= UINT32_MAX;
+  if (tickRateValid_) {
+    minimumIntervalTicks_ = static_cast<uint32_t>(
+        (static_cast<uint64_t>(ticksPerSecond) * 999U + 999U) / 1000U);
+    maximumIntervalTicks_ = static_cast<uint32_t>(
+        static_cast<uint64_t>(ticksPerSecond) * 1001U / 1000U);
+    maximumInterpolationTicks_ = static_cast<uint32_t>(maximumInterpolationTicks);
+    maximumAdvancePulses_ = UINT32_MAX / maximumIntervalTicks_;
+    if (maximumAdvancePulses_ > MAX_ADVANCE_PULSES)
+      maximumAdvancePulses_ = MAX_ADVANCE_PULSES;
+  }
+  reset();
+}
+
 // Clears the PPS anchor and restores the default pulse-interval estimate.
 void PpsClock::reset() {
   anchored_ = false;
   intervalDisciplined_ = false;
   pulseCount_ = 0;
-  edgeMicros_ = 0;
-  disciplinedIntervalMicros_ = 1000000;
+  edgeTicks_ = 0;
+  disciplinedIntervalTicksQ16_ = static_cast<uint64_t>(ticksPerSecond_) << 16;
+  updateConversionScale();
   utcAtEdge_ = {};
 }
 
 // Associates a captured PPS edge with its corresponding normalized UTC timestamp.
 bool PpsClock::setAnchor(const uint32_t pulseCount,
-                         const uint32_t edgeMicros,
+                         const uint32_t edgeTicks,
                          const NormalizedTimestamp& utcAtEdge) {
-  if (utcAtEdge.secondsSince1900 <= 0)
+  if (!tickRateValid_ || utcAtEdge.secondsSince1900 <= 0)
     return false;
 
   pulseCount_ = pulseCount;
-  edgeMicros_ = edgeMicros;
+  edgeTicks_ = edgeTicks;
   utcAtEdge_ = normalizeTimestamp(utcAtEdge.secondsSince1900, utcAtEdge.nanoseconds);
   anchored_ = true;
   return true;
@@ -51,30 +70,31 @@ bool PpsClock::setAnchor(const uint32_t pulseCount,
 
 // Validates a labeled PPS observation and uses it to establish or refresh the UTC anchor.
 bool PpsClock::setLabelledPulse(const uint32_t pulseCount,
-                                const uint32_t edgeMicros,
-                                const uint32_t intervalMicros,
+                                const uint32_t edgeTicks,
+                                const uint32_t intervalTicks,
                                 const NormalizedTimestamp& utcAtEdge) {
-  if (!isExpectedPulseInterval(intervalMicros)) {
+  if (!isExpectedTickInterval(intervalTicks)) {
     if (anchored_)
       reset();
     return false;
   }
 
   if (anchored_) {
-    if (!advanceToPulse(pulseCount, edgeMicros, intervalMicros))
+    if (!advanceToPulse(pulseCount, edgeTicks, intervalTicks))
       return false;
   }
   else {
-    disciplinedIntervalMicros_ = intervalMicros;
+    disciplinedIntervalTicksQ16_ = static_cast<uint64_t>(intervalTicks) << 16;
     intervalDisciplined_ = true;
+    updateConversionScale();
   }
-  return setAnchor(pulseCount, edgeMicros, utcAtEdge);
+  return setAnchor(pulseCount, edgeTicks, utcAtEdge);
 }
 
 // Advances the UTC anchor to a later valid PPS edge while refining the measured interval.
 bool PpsClock::advanceToPulse(const uint32_t pulseCount,
-                              const uint32_t edgeMicros,
-                              const uint32_t intervalMicros) {
+                              const uint32_t edgeTicks,
+                              const uint32_t intervalTicks) {
   if (!anchored_)
     return false;
 
@@ -82,67 +102,75 @@ bool PpsClock::advanceToPulse(const uint32_t pulseCount,
   if (elapsedPulses == 0)
     return true;
 
-  if (elapsedPulses > MAX_ADVANCE_PULSES || !isExpectedPulseInterval(intervalMicros)) {
+  if (elapsedPulses > maximumAdvancePulses_ || !isExpectedTickInterval(intervalTicks)) {
     reset();
     return false;
   }
 
-  const uint32_t elapsedMicros = edgeMicros - edgeMicros_;
-  const uint64_t minimumElapsedMicros =
-      static_cast<uint64_t>(elapsedPulses) * MIN_PULSE_INTERVAL_MICROS;
-  const uint64_t maximumElapsedMicros =
-      static_cast<uint64_t>(elapsedPulses) * MAX_PULSE_INTERVAL_MICROS;
-  if (elapsedMicros < minimumElapsedMicros || elapsedMicros > maximumElapsedMicros) {
+  const uint32_t elapsedTicks = edgeTicks - edgeTicks_;
+  const uint64_t minimumElapsedTicks =
+      static_cast<uint64_t>(elapsedPulses) * minimumIntervalTicks_;
+  const uint64_t maximumElapsedTicks =
+      static_cast<uint64_t>(elapsedPulses) * maximumIntervalTicks_;
+  if (elapsedTicks < minimumElapsedTicks || elapsedTicks > maximumElapsedTicks) {
     reset();
     return false;
   }
 
-  const uint32_t averageIntervalMicros = elapsedMicros / elapsedPulses;
+  const uint64_t averageIntervalTicksQ16 =
+      ((static_cast<uint64_t>(elapsedTicks) << 16) + elapsedPulses / 2U) / elapsedPulses;
   if (!intervalDisciplined_) {
-    disciplinedIntervalMicros_ = averageIntervalMicros;
+    disciplinedIntervalTicksQ16_ = averageIntervalTicksQ16;
     intervalDisciplined_ = true;
   }
   else {
-    // Smooth PPS-capture quantization while tracking the Teensy's oscillator.
-    disciplinedIntervalMicros_ =
-        (disciplinedIntervalMicros_ * 7U + averageIntervalMicros + 4U) / 8U;
+    // Preserve fractional ticks so small frequency changes survive the 1/8 filter.
+    disciplinedIntervalTicksQ16_ =
+        (disciplinedIntervalTicksQ16_ * 7U + averageIntervalTicksQ16 + 4U) / 8U;
   }
+  updateConversionScale();
 
-  utcAtEdge_ = normalizeTimestamp(utcAtEdge_.secondsSince1900 + elapsedPulses,
-                                  utcAtEdge_.nanoseconds);
+  utcAtEdge_.secondsSince1900 += elapsedPulses;
   pulseCount_ = pulseCount;
-  edgeMicros_ = edgeMicros;
+  edgeTicks_ = edgeTicks;
   return true;
 }
 
-// Interpolates a normalized UTC timestamp for a microsecond capture near the current PPS anchor.
-bool PpsClock::timestampAt(const uint32_t captureMicros, NormalizedTimestamp* timestamp) const {
+// Interpolates and normalizes with multiplication, shifts, and bounded subtraction.
+bool PpsClock::timestampAt(const uint32_t captureTicks, NormalizedTimestamp* timestamp) const {
   if (!anchored_ || timestamp == nullptr)
     return false;
 
-  const uint32_t elapsedMicros = captureMicros - edgeMicros_;
-  if (elapsedMicros > MAX_INTERPOLATION_MICROS)
+  const uint32_t elapsedTicks = captureTicks - edgeTicks_;
+  if (elapsedTicks > maximumInterpolationTicks_)
     return false;
 
-  const uint64_t elapsedNanoseconds =
-      (static_cast<uint64_t>(elapsedMicros) * NANOSECONDS_PER_SECOND +
-       disciplinedIntervalMicros_ / 2U) /
-      disciplinedIntervalMicros_;
-  *timestamp = normalizeTimestamp(
-      utcAtEdge_.secondsSince1900,
-      static_cast<int64_t>(utcAtEdge_.nanoseconds) + static_cast<int64_t>(elapsedNanoseconds));
+  const uint32_t elapsedNanoseconds = static_cast<uint32_t>(
+      (static_cast<uint64_t>(elapsedTicks) * nanosecondsPerTickQ32_ + (1ULL << 31)) >> 32);
+  timestamp->secondsSince1900 = utcAtEdge_.secondsSince1900;
+  // The accepted 2.5-second window and 1000 ppm tolerance keep this below 2^32.
+  uint32_t nanoseconds = utcAtEdge_.nanoseconds + elapsedNanoseconds;
+  if (nanoseconds >= 2000000000U) {
+    nanoseconds -= 2000000000U;
+    timestamp->secondsSince1900 += 2;
+  }
+  if (nanoseconds >= 1000000000U) {
+    nanoseconds -= 1000000000U;
+    ++timestamp->secondsSince1900;
+  }
+  timestamp->nanoseconds = nanoseconds;
   return true;
 }
 
 // Copies the current PPS anchor details to the caller when an anchor is available.
 bool PpsClock::getAnchor(uint32_t* pulseCount,
-                         uint32_t* edgeMicros,
+                         uint32_t* edgeTicks,
                          NormalizedTimestamp* utcAtEdge) const {
-  if (!anchored_ || pulseCount == nullptr || edgeMicros == nullptr || utcAtEdge == nullptr)
+  if (!anchored_ || pulseCount == nullptr || edgeTicks == nullptr || utcAtEdge == nullptr)
     return false;
 
   *pulseCount = pulseCount_;
-  *edgeMicros = edgeMicros_;
+  *edgeTicks = edgeTicks_;
   *utcAtEdge = utcAtEdge_;
   return true;
 }
@@ -150,6 +178,26 @@ bool PpsClock::getAnchor(uint32_t* pulseCount,
 // Reports whether the clock currently has a valid PPS-to-UTC anchor.
 bool PpsClock::isAnchored() const {
   return anchored_;
+}
+
+// Computes a rounded Q32 nanosecond scale without requiring 128-bit arithmetic.
+void PpsClock::updateConversionScale() {
+  if (!tickRateValid_) {
+    nanosecondsPerTickQ32_ = 0;
+    return;
+  }
+  const uint64_t numerator = NANOSECONDS_PER_SECOND << 32;
+  const uint64_t whole = numerator / disciplinedIntervalTicksQ16_;
+  const uint64_t remainder = numerator % disciplinedIntervalTicksQ16_;
+  nanosecondsPerTickQ32_ = (whole << 16) +
+      ((remainder << 16) + disciplinedIntervalTicksQ16_ / 2U) /
+          disciplinedIntervalTicksQ16_;
+}
+
+// Tests a measured interval in the configured hardware counter's tick units.
+bool PpsClock::isExpectedTickInterval(const uint32_t intervalTicks) const {
+  return tickRateValid_ && intervalTicks >= minimumIntervalTicks_ &&
+         intervalTicks <= maximumIntervalTicks_;
 }
 
 // Reports whether a measured pulse interval falls within the accepted PPS timing range.

@@ -16,6 +16,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="TeensyTimeServer.ino" />
+    <ClCompile Include="ClockPrecision.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PpsCapture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Properties.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -55,6 +61,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NtpTimestamp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ClockPrecision.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PpsCapture.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NtpPacket.h">

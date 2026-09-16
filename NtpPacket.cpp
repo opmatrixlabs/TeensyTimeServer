@@ -30,7 +30,6 @@ constexpr uint8_t NTP_CLIENT_MODE = 3;
 constexpr uint8_t NTP_SERVER_MODE = 4;
 constexpr uint8_t NTP_STRATUM_GPS = 1;
 constexpr uint8_t NTP_LEAP_ALARM = 3;
-constexpr uint8_t NTP_PRECISION_MINUS_9 = 0xF7;
 constexpr uint8_t NTP_ROOT_DISPERSION_LOW_BYTE = 0x50;
 }
 
@@ -58,7 +57,8 @@ NtpResponseStatus createNtpResponse(const uint8_t* request,
                                     const NormalizedTimestamp& transmitTime,
                                     const bool timeAvailable,
                                     uint8_t* response,
-                                    const std::size_t responseCapacity) {
+                                    const std::size_t responseCapacity,
+                                    const int8_t precision) {
   const NtpResponseStatus requestStatus = validateNtpRequest(request, requestLength);
   if (requestStatus != NtpResponseStatus::Ready)
     return requestStatus;
@@ -85,7 +85,7 @@ NtpResponseStatus createNtpResponse(const uint8_t* request,
   packet[0] = static_cast<uint8_t>((requestVersion << 3) | NTP_SERVER_MODE);
   packet[1] = NTP_STRATUM_GPS;
   packet[2] = request[2];
-  packet[3] = NTP_PRECISION_MINUS_9;
+  packet[3] = static_cast<uint8_t>(precision);
   packet[11] = NTP_ROOT_DISPERSION_LOW_BYTE;
   packet[12] = 'G';
   packet[13] = 'P';

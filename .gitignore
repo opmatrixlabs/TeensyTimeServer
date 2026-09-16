@@ -3,6 +3,7 @@
 __vm/
 bin/
 obj/
+/build/
 *.vcxproj.user
 
 # Other IDE-local state

@@ -23,6 +23,7 @@
 
 #include <cstddef>
 
+#include "ClockPrecision.h"
 #include "NtpTimestamp.h"
 
 constexpr std::size_t NTP_PACKET_SIZE = 48;
@@ -43,4 +44,5 @@ NtpResponseStatus createNtpResponse(const uint8_t* request,
                                     const NormalizedTimestamp& transmitTime,
                                     bool timeAvailable,
                                     uint8_t* response,
-                                    std::size_t responseCapacity);
+                                    std::size_t responseCapacity,
+                                    int8_t precision = NTP_TARGET_PRECISION);

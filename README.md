@@ -64,7 +64,7 @@ Important details:
 - Leave the ZED-F9T `TP1` routing jumper in its factory-closed state unless the TP1 SMA path is intentionally being isolated. The separate `TP1_LED` jumper may be opened to remove the time-pulse LED load.
 - Keep the TP1-to-RXI connection short and separated from Ethernet magnets, switching power wiring, and other noisy conductors.
 
-The firmware configures TP1 as an enabled, UTC-aligned, GNSS-synchronized, rising-edge 1 Hz pulse and attaches an interrupt to Teensy pin `0`. The pulse marks the exact second boundary, while `UBX-TIM-TP` supplies the UTC data associated with that boundary; both must be valid before the pulse clock is used for synchronized NTP responses.
+The firmware configures TP1 as an enabled, UTC-aligned, GNSS-synchronized, rising-edge 1 Hz pulse. FlexPWM1 submodule 1 captures the rising edge directly on Teensy pin `0`; the wiring is unchanged. `UBX-TIM-TP` supplies the UTC data associated with that boundary; both must be valid before the pulse clock is used for synchronized NTP responses.
 
 See [PPS_Upgrade.md](PPS_Upgrade.md) for additional background and signal-routing notes.
 
@@ -73,6 +73,30 @@ See [PPS_Upgrade.md](PPS_Upgrade.md) for additional background and signal-routin
 ### GNSS time from the TP1 rising edge
 
 The ZED-F9T TP1 output is routed to RXI, captured on Teensy pin `0`, and associated with a validated `UBX-TIM-TP` UTC data to control the NTP clock. Using the hardware rising edge as the precise second boundary avoids variable I2C polling and message-arrival latency, producing more stable and accurate NTP timestamps.
+
+### NTP clock precision target: 2^-20 seconds
+
+Version 3.2.1 targets an NTP clock precision of `-20`, equivalent to approximately 0.954 microseconds. Precision describes local clock resolution and clock-read cost; it does not specify network latency or client synchronization accuracy.
+
+- PPS edges are latched by the existing pin's FlexPWM capture hardware. At the normal 600 MHz CPU / 150 MHz bus configuration, timer resolution is approximately 6.67 ns. Interrupt-entry latency does not set the captured edge time.
+- The clock retains fractional timer ticks while estimating the number of ticks per GPS second. This avoids the former whole-microsecond averaging deadband.
+- Timestamp interpolation uses a precomputed fixed-point scale, with multiplication and shifts in the clock-read path.
+- After the first confirmed UTC lock, the firmware measures 256 complete clock reads with the CPU cycle counter. It uses the fastest valid read, including capture access and freshness validation, and conservatively includes the timer resolution. It advertises `-20` only if that measurement supports it; otherwise it advertises the measured, coarser exponent and records an error. At 600 MHz, the target permits at most 572 CPU cycles per read.
+- The capture driver extends timer rollovers and rejects ambiguous pulse captures. It checks for timer continuity and CPU/bus clock changes. A continuity fault leaves NTP unsynchronized until restart. Changing clocks or using another PWM/capture library on FlexPWM1 submodule 1 is unsupported while this clock is active.
+
+The **GPS-Time Config** page and startup logs report the timer frequency, measured clock-read cycles, precision exponent, and whether the target was met. No synchronized response is sent before the precision measurement completes. The nanosecond timer resolution is not a claim of nanosecond absolute UTC accuracy.
+
+#### Verification
+
+Run the host regression suites with `powershell -File tests\RunTests.ps1`. They cover fractional clock correction, capture and counter rollover, timestamp conversion, NTP precision encoding, and the existing firmware behavior.
+
+After installing the new firmware and allowing GPS synchronization, query the appliance:
+
+```powershell
+python -B tests/ProbeNtp.py 10.100.100.12 --samples 5
+```
+
+Successful synchronized replies should report `leap: 0`, `stratum: 1`, and `precision_exponent: -20`. Check the device's clock-read measurement as well; a packet's precision byte alone does not prove timing performance. The probe makes ordinary NTP requests and does not change the client clock.
 
 ### Ethernet glitch handling
 

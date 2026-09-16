@@ -53,7 +53,7 @@ Properties::Properties() {
   isDhcp_ = false;  
 }
 
-// Destroys the properties container.
+// Destroys the property's container.
 Properties::~Properties()
 = default;
 

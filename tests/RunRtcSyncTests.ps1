@@ -24,6 +24,7 @@ foreach ($name in @(
     'DEFAULT_RTC_WRITE_MICROS', 'RTC_CAPTURE_MAX_AGE_MICROS',
     'RTC_INITIALIZATION_RETRY_MILLIS', 'TIMTP_STALE_MILLIS',
     'RTC_SYNC_MAX_ATTEMPTS', 'RTC_SYNC_RETRY_MILLIS',
+    'RTC_CONTROL_STOP_MASK', 'RTC_CONTROL_12_HOUR_MASK', 'RTC_CONTROL_WRITE_ENABLE_MASK',
     'RTC_SYNC_VERIFY_READS', 'RTC_SYNC_VERIFY_TOLERANCE_HUNDREDTHS')) {
   $declarations += Get-SketchFragment "(?m)^constexpr\s+\w+\s+$name\s*=\s*[^;]+;" $name
 }
@@ -31,7 +32,7 @@ foreach ($name in @(
 $functions = @()
 foreach ($name in @(
     'hasElapsed', 'rtcSyncIntervalExpired', 'setRtc', 'reportRtcSyncErrorOnce',
-    'writeRtcAtCapturedPulse', 'verifyRtcWrite', 'serviceRtcSync')) {
+    'prepareRtcForWrite', 'writeRtcAtCapturedPulse', 'verifyRtcWrite', 'serviceRtcSync')) {
   # Sketch functions use unindented closing braces, so nested blocks remain included.
   $functions += Get-SketchFragment "(?ms)^(?:bool|void|RtcTimestampReadStatus)\s+$name\s*\([^;{}]*\)\s*\{.*?^\}" $name
 }

@@ -86,9 +86,19 @@ PpsClock ppsClock;
 uint32_t fakePulseCount = 10;
 uint32_t fakePulseInterval = 1000000;
 uint32_t fakePulseEdge = 0;
+uint32_t fakeTicksPerMicrosecond = 1;
 NormalizedTimestamp fakePulseUtc = {};
 bool labelPulse = true;
 bool writeAcknowledged = true;
+constexpr uint8_t RV1805_CTRL1 = 0x10;
+uint8_t control1 = 0x01;
+uint8_t controlAtLastTimeWrite = 0;
+bool controlReadAcknowledged = true;
+bool controlWriteAcknowledged = true;
+bool controlWriteLatched = true;
+uint32_t controlReadCalls = 0;
+uint32_t controlWriteCalls = 0;
+std::deque<bool> controlReadResults;
 uint32_t writeCalls = 0;
 uint32_t readCalls = 0;
 uint64_t storedHundredths = 0;
@@ -123,12 +133,28 @@ struct FakeRtc {
     return static_cast<uint8_t>((value / 10U) * 16U + value % 10U);
   }
 
-  // Records a production RTC write and optionally acknowledges the simulated I2C transfer.
+  // Models an acknowledged Control1 write that may fail to latch in the RTC.
+  bool writeRegister(uint8_t address, uint8_t value) const {
+    assert(address == RV1805_CTRL1);
+    ++controlWriteCalls;
+    fakeMicroseconds += 100;
+    if (!controlWriteAcknowledged)
+      return false;
+    if (controlWriteLatched)
+      control1 = value;
+    return true;
+  }
+
+  // Acknowledges RTC writes but preserves the previous time while Control1 write protection is active.
   bool setTime(uint8_t* registers, uint8_t count) const {
     ++writeCalls;
+    controlAtLastTimeWrite = control1;
     fakeMicroseconds += DEFAULT_RTC_WRITE_MICROS;
     if (!writeAcknowledged)
       return false;
+    // WRTC is bit 0 in the device register, independently of the production masks.
+    if ((control1 & 0x01) == 0)
+      return true;
     RtcDateTime timestamp = {};
     assert(decodeRv1805Timestamp(registers, count, &timestamp));
     TimeData time(timestamp.year, timestamp.month, timestamp.day, timestamp.hour,
@@ -141,18 +167,40 @@ struct FakeRtc {
 
 FakeRtc rtc;
 
+// Supplies Control1 reads with independently injectable transfer failures for preparation and confirmation.
+bool readRtcRegisters(uint8_t firstRegister, uint8_t* registers, uint8_t count) {
+  assert(firstRegister == RV1805_CTRL1 && registers != nullptr && count == 1);
+  ++controlReadCalls;
+  fakeMicroseconds += 100;
+  bool acknowledged = controlReadAcknowledged;
+  if (!controlReadResults.empty()) {
+    acknowledged = controlReadResults.front();
+    controlReadResults.pop_front();
+  }
+  if (!acknowledged)
+    return false;
+  *registers = control1;
+  return true;
+}
+
 // Supplies the latest simulated time-pulse capture to the production synchronization functions.
-void getTimePulseStatus(uint32_t* count, uint32_t* interval, uint32_t* edge = nullptr) {
+void getTimePulseStatus(uint32_t* count, uint32_t* interval, uint32_t* edge = nullptr,
+                        uint32_t* invalid = nullptr, uint32_t* ticks = nullptr) {
   *count = fakePulseCount;
   *interval = fakePulseInterval;
   if (edge != nullptr)
     *edge = fakePulseEdge;
+  if (invalid != nullptr)
+    *invalid = 0;
+  if (ticks != nullptr)
+    *ticks = fakePulseEdge * fakeTicksPerMicrosecond;
 }
 
 // Labels the simulated capture using the real PPS clock when a UTC label is available.
 void updatePpsClockFromPulse() {
   if (labelPulse)
-    assert(ppsClock.setAnchor(fakePulseCount, fakePulseEdge, fakePulseUtc));
+    assert(ppsClock.setAnchor(fakePulseCount,
+                              fakePulseEdge * fakeTicksPerMicrosecond, fakePulseUtc));
 }
 
 // Returns a queued RTC read result or advances the simulated RTC from its most recent write.
@@ -168,8 +216,10 @@ RtcTimestampReadStatus readRtcDateTime(RtcDateTime* timestamp) {
   }
   fakeMicroseconds += 100;
   if (defaultReadStatus == RtcTimestampReadStatus::Success) {
+    const uint64_t elapsedHundredths = (control1 & 0x80) != 0
+        ? 0 : (fakeMicroseconds - storedAtMicroseconds) / 10000ULL;
     *timestamp = fromHundredths(storedHundredths +
-                                (fakeMicroseconds - storedAtMicroseconds) / 10000ULL);
+                                elapsedHundredths);
   }
   return defaultReadStatus;
 }
@@ -210,7 +260,8 @@ void resetFixture() {
   ppsClockConfirmed = true;
   validTimTpSeen = true;
   lastValidTimTpMillis = millis();
-  ppsClock.reset();
+  ppsClock = PpsClock();
+  fakeTicksPerMicrosecond = 1;
   fakePulseCount = 10;
   fakePulseInterval = 1000000;
   fakePulseEdge = micros();
@@ -218,6 +269,14 @@ void resetFixture() {
   fakePulseUtc = {static_cast<int64_t>(time.secondsSince1900()), 0};
   labelPulse = true;
   writeAcknowledged = true;
+  control1 = 0x01;
+  controlAtLastTimeWrite = 0;
+  controlReadAcknowledged = true;
+  controlWriteAcknowledged = true;
+  controlWriteLatched = true;
+  controlReadCalls = 0;
+  controlWriteCalls = 0;
+  controlReadResults.clear();
   writeCalls = 0;
   readCalls = 0;
   storedHundredths = toHundredths(time);
@@ -521,6 +580,116 @@ void testVerificationAcrossCalendarAndMicrosRollover() {
   }
 }
 
+// Fine ticks establish anchor identity; RTC compensation still uses microseconds.
+void testHighResolutionCaptureUsesCoarseRtcWriteAge() {
+  const uint64_t startingMicroseconds[] = {28000000ULL, UINT32_MAX - 500000ULL};
+  for (const uint64_t start : startingMicroseconds) {
+    resetFixture();
+    ppsClock = PpsClock(150000000);
+    fakeTicksPerMicrosecond = 150;
+    fakeMicroseconds = start;
+    fakePulseEdge = micros();
+    lastValidTimTpMillis = millis();
+    setRtc();
+    nextPulse();
+    delay(123);
+    serviceRtcSync();
+    assert(rtcSyncState == RtcSyncState::Idle);
+    assert(writeCalls == 1 && readCalls == 1 && logs.size() == 1);
+    assert(storedHundredths == static_cast<uint64_t>(fakePulseUtc.secondsSince1900) * 100ULL + 12);
+    uint32_t pulseCount = 0, anchorTicks = 0;
+    NormalizedTimestamp anchor = {};
+    assert(ppsClock.getAnchor(&pulseCount, &anchorTicks, &anchor));
+    assert(anchorTicks == fakePulseEdge * 150U);
+    assert(anchorTicks != fakePulseEdge);
+  }
+}
+
+// Reproduces a successful bus acknowledgement that leaves a write-protected RTC 32 hours behind UTC.
+void testAcknowledgementDoesNotMeanClockWasUpdated() {
+  resetFixture();
+  control1 = 0;
+  const uint64_t previousTime = storedHundredths;
+  TimeData desired;
+  assert(desired.setSecondsSince1900(previousTime / 100ULL + 32ULL * 3600ULL));
+  uint8_t registers[] = {
+      0, rtc.DECtoBCD(desired.getSec()), rtc.DECtoBCD(desired.getMin()),
+      rtc.DECtoBCD(desired.getHour()), rtc.DECtoBCD(desired.getDay()),
+      rtc.DECtoBCD(desired.getMonth()), rtc.DECtoBCD(desired.getYear() - 2000), 0};
+  assert(rtc.setTime(registers, static_cast<uint8_t>(std::size(registers))));
+  assert(storedHundredths == previousTime);
+  assert(verifyRtcWrite(desired) == RtcTimestampReadStatus::InvalidTimestamp);
+}
+
+// Verifies that synchronization recovers protected, stopped, and 12-hour control states without losing unrelated flags.
+void testSynchronizationPreparesRtcControlState() {
+  const uint8_t initialControls[] = {0x00, 0x7E, 0xBF, 0xFE};
+  for (const uint8_t initialControl : initialControls) {
+    resetFixture();
+    control1 = initialControl;
+    storedHundredths -= 32ULL * 3600ULL * 100ULL;
+    setRtc();
+    nextPulse();
+    serviceRtcSync();
+    assert(rtcSyncState == RtcSyncState::Idle && logs.size() == 1);
+    assert((controlAtLastTimeWrite & 0xC1) == 0x01);
+    assert((control1 & 0x3E) == (initialControl & 0x3E));
+    assert(controlWriteCalls == 1 && writeCalls == 1);
+    assert(storedHundredths / 100ULL == static_cast<uint64_t>(fakePulseUtc.secondsSince1900));
+    delay(30);
+    RtcDateTime observed = {};
+    assert(readRtcDateTime(&observed) == RtcTimestampReadStatus::Success);
+    assert(observed.hundredths >= 3);
+  }
+}
+
+// Verifies that an already writable running clock avoids an unnecessary Control1 write.
+void testPreparedClockKeepsUnrelatedControlFlags() {
+  resetFixture();
+  control1 = 0x3F;
+  setRtc();
+  nextPulse();
+  serviceRtcSync();
+  assert(rtcSyncState == RtcSyncState::Idle && writeCalls == 1);
+  assert(control1 == 0x3F && controlWriteCalls == 0);
+}
+
+// Verifies that failed Control1 transfers or an ignored write cannot proceed to the calendar write or exhaust retries indefinitely.
+void testControlPreparationFailuresUseBoundedRetries() {
+  for (uint8_t failure = 0; failure < 4; ++failure) {
+    resetFixture();
+    control1 = 0;
+    controlReadAcknowledged = failure != 0;
+    controlWriteAcknowledged = failure != 1;
+    controlWriteLatched = failure != 2;
+    setRtc();
+    for (uint8_t attempt = 1; attempt <= RTC_SYNC_MAX_ATTEMPTS; ++attempt) {
+      // Model the failed confirmation read separately from the initial register read.
+      if (failure == 3) {
+        control1 = 0;
+        controlReadResults.push_back(true);
+        controlReadResults.push_back(false);
+      }
+      nextPulse();
+      serviceRtcSync();
+      assert(rtcSyncAttempts == attempt && writeCalls == 0);
+      assert(readCalls == 0 && logs.empty());
+      if (attempt < RTC_SYNC_MAX_ATTEMPTS) {
+        assert(rtcSyncState == RtcSyncState::RetryBackoff);
+        rtcAvailable = true;
+        delay(RTC_SYNC_RETRY_MILLIS);
+        serviceRtcSync();
+        assert(rtcSyncState == RtcSyncState::WaitForPulse);
+      }
+    }
+    assert(rtcSyncState == RtcSyncState::WaitForInterval);
+    assert(!errors.empty());
+    runAutomaticScheduler();
+    assert(rtcSyncState == RtcSyncState::WaitForInterval);
+    assert(writeCalls == 0);
+  }
+}
+
 } // namespace
 
 // Runs the production RTC synchronization regression scenarios and reports success.
@@ -538,6 +707,11 @@ int main() {
   testVerificationDistinguishesContentAndTransportFailures();
   testVerificationToleranceAndMismatches();
   testVerificationAcrossCalendarAndMicrosRollover();
-  std::puts("RTC sync regression tests passed (13 scenarios).");
+  testHighResolutionCaptureUsesCoarseRtcWriteAge();
+  testAcknowledgementDoesNotMeanClockWasUpdated();
+  testSynchronizationPreparesRtcControlState();
+  testPreparedClockKeepsUnrelatedControlFlags();
+  testControlPreparationFailuresUseBoundedRetries();
+  std::puts("RTC sync regression tests passed (18 scenarios).");
   return 0;
 }

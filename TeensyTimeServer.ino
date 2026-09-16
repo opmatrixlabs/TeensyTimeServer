@@ -47,6 +47,8 @@
 #include "NtpTimestamp.h"
 #include "NtpPacket.h"
 #include "PpsClock.h"
+#include "PpsCapture.h"
+#include "ClockPrecision.h"
 #include "GnssStatus.h"
 #include "FirmwareUpdater.h"
 #include "RtcTimestamp.h"
@@ -68,7 +70,9 @@ void invalidatePpsTimebase();
 void drainGnssBeforeTimTpBoundary();
 void servicePpsTimebase();
 void updatePpsClockFromPulse();
-bool getPpsTimestamp(uint32_t captureMicros, NormalizedTimestamp* timestamp);
+bool getPpsTimestamp(uint32_t captureTicks, NormalizedTimestamp* timestamp);
+bool readPpsTimestamp(NormalizedTimestamp* timestamp);
+void measureNtpClockPrecision();
 bool configureRtcXtOscillator();
 bool rtcSyncIntervalExpired();
 void setRtc();
@@ -83,12 +87,13 @@ void installFirmwareUpdate();
 void serviceFirmwareInstall();
 bool bindNtpUdpSocket();
 bool discardCurrentUdpPacket();
-void processNtpRequest(int packetSize, uint32_t receiveCaptureMicros);
-void timePulseInterrupt();
+void processNtpRequest(int packetSize, uint32_t receiveCaptureTicks, bool captureValid);
 void getTimePulseStatus(uint32_t* pulseCount,
                         uint32_t* intervalMicros,
                         uint32_t* edgeMicros = nullptr,
-                        uint32_t* invalidIntervalCount = nullptr);
+                        uint32_t* invalidIntervalCount = nullptr,
+                        uint32_t* edgeTicks = nullptr,
+                        uint32_t* intervalTicks = nullptr);
 void reportTimePulse();
 String getGpsISO8601Time();
 void addLog(String log);
@@ -97,7 +102,7 @@ void recordError(String error);
 void displaySettings();
 
 const char* APP_NAME = "GPS NTP Time Server";
-const char* VERSION = "3.1.1";
+const char* VERSION = "3.2.1";
 const char* AUTHOR = "Andrew Kevin Bailey";
 
 /**** Setup Properties init *****/
@@ -202,6 +207,9 @@ constexpr uint8_t RTC_SYNC_MAX_ATTEMPTS = 3;
 constexpr uint32_t RTC_SYNC_RETRY_MILLIS = 5000;
 constexpr uint8_t RTC_SYNC_VERIFY_READS = 3;
 constexpr int64_t RTC_SYNC_VERIFY_TOLERANCE_HUNDREDTHS = 2;
+constexpr uint8_t RTC_CONTROL_STOP_MASK = 0x80;
+constexpr uint8_t RTC_CONTROL_12_HOUR_MASK = 0x40;
+constexpr uint8_t RTC_CONTROL_WRITE_ENABLE_MASK = 0x01;
 // Keep the XT oscillator active on both VDD and backup power. The standby RC
 // oscillator is calibrated every 512 seconds and is used only if XT fails.
 constexpr uint8_t RTC_XT_STARTUP_MODE = 0b01100000;
@@ -303,11 +311,11 @@ constexpr uint32_t TIMTP_POST_EDGE_DRAIN_GUARD_MICROS = 25000;
 constexpr uint32_t PPS_ACQUISITION_RETRY_MILLIS = 1379;
 constexpr uint8_t MAX_PPS_ACQUISITION_FAILURES = 3;
 constexpr int64_t TIMTP_LABEL_TOLERANCE_NANOSECONDS = 1000000LL;
-volatile uint32_t timePulseCount = 0;
-volatile uint32_t timePulseEdgeMicros = 0;
-volatile uint32_t timePulseIntervalMicros = 0;
-volatile uint32_t timePulseInvalidIntervalCount = 0;
 PpsClock ppsClock;
+bool clockPrecisionMeasured = false;
+int8_t ntpClockPrecision = -9;
+uint32_t ntpClockReadCycles = 0;
+volatile uint32_t clockBenchmarkSink = 0;
 bool timTpTargetPending = false;
 uint32_t timTpTargetPulseCount = 0;
 NormalizedTimestamp timTpTargetUtc = {};
@@ -425,7 +433,9 @@ bool readRtcRegisters(const uint8_t firstRegister,
 
   Wire.beginTransmission(RV1805_ADDR);
   const std::size_t addressBytesWritten = Wire.write(firstRegister);
-  const uint8_t addressStatus = Wire.endTransmission(false);
+  // RV-1805 register selection uses STOP then START (application manual 4.2.9),
+  // matching SparkFun's driver instead of holding the bus for a repeated START.
+  const uint8_t addressStatus = Wire.endTransmission(true);
   if (addressBytesWritten != 1U || addressStatus != 0)
     return false;
 
@@ -480,13 +490,19 @@ RtcTimestampReadStatus verifyRtcWrite(TimeData& writtenTime) {
   const uint64_t writtenHundredths = writtenTime.secondsSince1900() * 100ULL +
       static_cast<uint32_t>(writtenTime.getSubSec()) / 10000000U;
   RtcTimestampReadStatus result = RtcTimestampReadStatus::TransportFailure;
+  String lastObservedTime = "unavailable";
 
   for (uint8_t attempt = 0; attempt < RTC_SYNC_VERIFY_READS; ++attempt) {
     RtcDateTime observed = {};
     const RtcTimestampReadStatus status = readRtcDateTime(&observed);
+    lastObservedTime = status == RtcTimestampReadStatus::TransportFailure
+                          ? String("I2C read failed") : String("invalid calendar registers");
     if (status != RtcTimestampReadStatus::TransportFailure)
       result = RtcTimestampReadStatus::InvalidTimestamp;
     if (status == RtcTimestampReadStatus::Success) {
+      lastObservedTime = TimeData::toISO8601Time(
+          observed.year, observed.month, observed.day, observed.hour,
+          observed.minute, observed.second, observed.hundredths, 2);
       TimeData observedTime(observed.year, observed.month, observed.day,
                             observed.hour, observed.minute, observed.second, 0);
       const uint64_t observedHundredths = observedTime.secondsSince1900() * 100ULL +
@@ -503,6 +519,12 @@ RtcTimestampReadStatus verifyRtcWrite(TimeData& writtenTime) {
     if (attempt + 1 < RTC_SYNC_VERIFY_READS)
       delay(1);
   }
+  uint8_t control = 0;
+  const bool controlRead = readRtcRegisters(RV1805_CTRL1, &control, 1);
+  recordRtcTimestampError(String("RTC verification mismatch: expected ") +
+                          writtenTime.getISO8601Time(2) + "; read " + lastObservedTime +
+                          "; Control1=" + (controlRead ? String(static_cast<int>(control))
+                                                       : String("unavailable")));
   return result;
 }
 
@@ -1022,7 +1044,7 @@ void serviceFirmwareInstall() {
   firmwareInstallPending = false;
   // No SPI/W5500 or GNSS work is permitted after flash replacement begins.
   // The updater masks interrupts and reboots without returning.
-  detachInterrupt(digitalPinToInterrupt(TIME_PULSE_PIN));
+  PpsCapture::end();
   udp.stop();
   ntpUdpBound = false;
   ntpSocketNumber = MAX_SOCK_NUM;
@@ -1372,8 +1394,12 @@ void initializePeripheralServices() {
 
   // Capture TP1 immediately. Pulses are ignored for synchronized NTP until the
   // GNSS state machine confirms the configuration and fresh TIM-TP labels.
-  pinMode(TIME_PULSE_PIN, INPUT);
-  attachInterrupt(digitalPinToInterrupt(TIME_PULSE_PIN), timePulseInterrupt, RISING);
+  if (PpsCapture::begin()) {
+    ppsClock = PpsClock(PpsCapture::ticksPerSecond());
+  }
+  else {
+    recordError("TP1 hardware capture unavailable; NTP will remain unsynchronized");
+  }
 }
 
 // Retries RTC discovery and configuration before requesting its startup synchronization.
@@ -1787,8 +1813,9 @@ void loop() {
   if (ethernetOnline && ntpUdpBound) {
     int packetSize = udp.parsePacket();
     if (packetSize) {
-      const uint32_t receiveCaptureMicros = micros();
-      processNtpRequest(packetSize, receiveCaptureMicros);
+      uint32_t receiveCaptureTicks = 0;
+      const bool captureValid = PpsCapture::readTicks(&receiveCaptureTicks);
+      processNtpRequest(packetSize, receiveCaptureTicks, captureValid);
     }
   }
   /***** End NTP server *****/
@@ -1875,6 +1902,13 @@ void getDeviceConfig() {
   configLog += "\n UBX-TIM-TP target pending = " + String(timTpTargetPending ? 1 : 0);
   configLog += "\n TP1 NTP clock anchored = " + String(ppsClock.isAnchored() ? 1 : 0);
   configLog += "\n TP1 NTP clock confirmed = " + String(ppsClockConfirmed ? 1 : 0);
+  configLog += "\n TP1 capture timer frequency (Hz) = " + String(PpsCapture::ticksPerSecond());
+  configLog += "\n NTP precision measured = " + String(clockPrecisionMeasured ? 1 : 0);
+  configLog += "\n NTP precision exponent = " + String(static_cast<int>(ntpClockPrecision));
+  configLog += "\n NTP minimum clock read (CPU cycles) = " + String(ntpClockReadCycles);
+  configLog += "\n NTP CPU frequency (Hz) = " + String(F_CPU_ACTUAL);
+  configLog += "\n NTP 2^-20 precision target met = " +
+               String(clockPrecisionMeasured && ntpClockPrecision <= NTP_TARGET_PRECISION ? 1 : 0);
 
   // The setup page is available before GNSS startup finishes. Never turn its
   // Reload Server Config action into a wait for an absent receiver.
@@ -2092,9 +2126,8 @@ void invalidatePpsTimebase() {
   ppsClockConfirmed = false;
   timTpFreshStreamReady = false;
   timTpPostEdgeDrainPending = false;
-  noInterrupts();
-  timTpFreshnessReferencePulseCount = timePulseCount;
-  interrupts();
+  uint32_t intervalMicros = 0;
+  getTimePulseStatus(&timTpFreshnessReferencePulseCount, &intervalMicros);
 }
 
 // Drains queued GNSS traffic and discards TIM-TP data preceding a fresh boundary.
@@ -2252,10 +2285,14 @@ void updatePpsClockFromPulse() {
   uint32_t intervalMicros = 0;
   uint32_t edgeMicros = 0;
   uint32_t invalidIntervalCount = 0;
+  uint32_t edgeTicks = 0;
+  uint32_t intervalTicks = 0;
   getTimePulseStatus(&pulseCount,
                      &intervalMicros,
                      &edgeMicros,
-                     &invalidIntervalCount);
+                     &invalidIntervalCount,
+                     &edgeTicks,
+                     &intervalTicks);
 
   if (invalidIntervalCount != observedInvalidIntervalCount) {
     observedInvalidIntervalCount = invalidIntervalCount;
@@ -2269,8 +2306,8 @@ void updatePpsClockFromPulse() {
     if (targetDifference == 0 && pulseCount >= 2 &&
         PpsClock::isExpectedPulseInterval(intervalMicros)) {
       anchoredFromTarget = ppsClock.setLabelledPulse(pulseCount,
-                                                     edgeMicros,
-                                                     intervalMicros,
+                                                     edgeTicks,
+                                                     intervalTicks,
                                                      timTpTargetUtc);
       timTpTargetPending = false;
       if (!anchoredFromTarget) {
@@ -2290,7 +2327,7 @@ void updatePpsClockFromPulse() {
   }
 
   if (ppsClock.isAnchored() && !anchoredFromTarget &&
-      !ppsClock.advanceToPulse(pulseCount, edgeMicros, intervalMicros)) {
+      !ppsClock.advanceToPulse(pulseCount, edgeTicks, intervalTicks)) {
     invalidatePpsTimebase();
   }
 }
@@ -2299,25 +2336,28 @@ void updatePpsClockFromPulse() {
 bool getCoherentPpsAnchor(uint32_t* pulseCount,
                           uint32_t* edgeMicros,
                           uint32_t* intervalMicros,
-                          NormalizedTimestamp* utcAtEdge) {
+                          NormalizedTimestamp* utcAtEdge,
+                          uint32_t* edgeTicks,
+                          uint32_t* intervalTicks) {
   for (uint8_t attempt = 0; attempt < 3; ++attempt) {
     updatePpsClockFromPulse();
 
     uint32_t anchorPulseCount = 0;
-    uint32_t anchorEdgeMicros = 0;
+    uint32_t anchorEdgeTicks = 0;
     NormalizedTimestamp anchorUtc = {};
-    if (!ppsClock.getAnchor(&anchorPulseCount, &anchorEdgeMicros, &anchorUtc))
+    if (!ppsClock.getAnchor(&anchorPulseCount, &anchorEdgeTicks, &anchorUtc))
       return false;
 
-    uint32_t currentPulseCount = 0;
-    uint32_t currentEdgeMicros = 0;
-    uint32_t currentIntervalMicros = 0;
-    getTimePulseStatus(&currentPulseCount, &currentIntervalMicros, &currentEdgeMicros);
-    if (anchorPulseCount == currentPulseCount && anchorEdgeMicros == currentEdgeMicros) {
+    PpsCapture::Snapshot capture = {};
+    if (!PpsCapture::snapshot(&capture) || !capture.timerHealthy)
+      return false;
+    if (anchorPulseCount == capture.pulseCount && anchorEdgeTicks == capture.edgeTicks) {
       *pulseCount = anchorPulseCount;
-      *edgeMicros = anchorEdgeMicros;
-      *intervalMicros = currentIntervalMicros;
+      *edgeMicros = capture.edgeMicros;
+      *intervalMicros = capture.intervalMicros;
       *utcAtEdge = anchorUtc;
+      *edgeTicks = capture.edgeTicks;
+      *intervalTicks = capture.intervalTicks;
       return true;
     }
   }
@@ -2515,11 +2555,15 @@ void servicePpsTimebase() {
   uint32_t anchorPulseCount = 0;
   uint32_t intervalMicros = 0;
   uint32_t anchorEdgeMicros = 0;
+  uint32_t anchorEdgeTicks = 0;
+  uint32_t intervalTicks = 0;
   NormalizedTimestamp anchorUtc = {};
   if (!getCoherentPpsAnchor(&anchorPulseCount,
                             &anchorEdgeMicros,
                             &intervalMicros,
-                            &anchorUtc))
+                            &anchorUtc,
+                            &anchorEdgeTicks,
+                            &intervalTicks))
     return;
 
   const NormalizedTimestamp expectedNextUtc =
@@ -2530,8 +2574,8 @@ void servicePpsTimebase() {
     // anchor makes that case unambiguous.
     if (PpsClock::isExpectedPulseInterval(intervalMicros)) {
       labelAccepted = ppsClock.setLabelledPulse(anchorPulseCount,
-                                                anchorEdgeMicros,
-                                                intervalMicros,
+                                                anchorEdgeTicks,
+                                                intervalTicks,
                                                 reportedUtc);
       if (labelAccepted)
         timTpTargetPending = false;
@@ -2571,29 +2615,76 @@ void servicePpsTimebase() {
     ppsClockConfirmed = true;
     ppsDiscontinuityReported = false;
     updatePpsClockFromPulse();
+    measureNtpClockPrecision();
   }
 }
 
-// Converts a captured microsecond value into a validated PPS-derived UTC timestamp.
-bool getPpsTimestamp(const uint32_t captureMicros, NormalizedTimestamp* timestamp) {
+// Converts timer ticks to UTC. Milliseconds/microseconds only guard freshness;
+// they are never used to construct the NTP fractional timestamp.
+bool getPpsTimestamp(const uint32_t captureTicks, NormalizedTimestamp* timestamp) {
   if (timestamp == nullptr || !ppsClockConfirmed || !validTimTpSeen ||
       static_cast<uint32_t>(millis() - lastValidTimTpMillis) > TIMTP_STALE_MILLIS)
     return false;
 
-  uint32_t pulseCount = 0;
-  uint32_t intervalMicros = 0;
-  uint32_t edgeMicros = 0;
-  uint32_t invalidIntervalCount = 0;
-  getTimePulseStatus(&pulseCount,
-                     &intervalMicros,
-                     &edgeMicros,
-                     &invalidIntervalCount);
-  if (pulseCount < 2 || !PpsClock::isExpectedPulseInterval(intervalMicros) ||
-      invalidIntervalCount != observedInvalidIntervalCount ||
-      static_cast<uint32_t>(micros() - edgeMicros) > TIME_PULSE_STALE_MICROS)
+  PpsCapture::Snapshot capture = {};
+  if (!PpsCapture::snapshot(&capture) || !capture.timerHealthy ||
+      capture.pulseCount < 2 || !PpsClock::isExpectedPulseInterval(capture.intervalMicros) ||
+      capture.invalidPulseCount != observedInvalidIntervalCount ||
+      static_cast<uint32_t>(micros() - capture.edgeMicros) > TIME_PULSE_STALE_MICROS)
     return false;
 
-  return ppsClock.timestampAt(captureMicros, timestamp);
+  return ppsClock.timestampAt(captureTicks, timestamp);
+}
+
+// Reads a validated UTC timestamp through the complete clock-read path used for NTP precision measurement.
+bool readPpsTimestamp(NormalizedTimestamp* timestamp) {
+  uint32_t ticks = 0;
+  return PpsCapture::readTicks(&ticks) && getPpsTimestamp(ticks, timestamp);
+}
+
+// Measures the complete clock-read duration and selects the NTP precision exponent supported by the result.
+// RFC 5905 precision is the greater of clock resolution and minimum read cost.
+// Measure after UTC lock, with interrupts enabled and caches warmed naturally.
+// The DWT counter is only the stopwatch; timestamps use the PPS capture timer.
+void measureNtpClockPrecision() {
+  if (clockPrecisionMeasured || !ppsClockConfirmed)
+    return;
+
+  uint32_t minimumCycles = UINT32_MAX;
+  uint16_t successfulReads = 0;
+  for (uint16_t sample = 0; sample < 256; ++sample) {
+    NormalizedTimestamp timestamp = {};
+    asm volatile("" ::: "memory");
+    const uint32_t startCycles = ARM_DWT_CYCCNT;
+    const bool available = readPpsTimestamp(&timestamp);
+    asm volatile("" ::: "memory");
+    const uint32_t elapsedCycles = ARM_DWT_CYCCNT - startCycles;
+    if (available) {
+      if (elapsedCycles < minimumCycles)
+        minimumCycles = elapsedCycles;
+      ++successfulReads;
+      clockBenchmarkSink = timestamp.nanoseconds;
+    }
+  }
+  if (successfulReads < 128 || PpsCapture::ticksPerSecond() == 0)
+    return;
+
+  const uint32_t resolutionCycles =
+      (F_CPU_ACTUAL + PpsCapture::ticksPerSecond() - 1U) / PpsCapture::ticksPerSecond();
+  ntpClockReadCycles = minimumCycles;
+  ntpClockPrecision = precisionForClock(F_CPU_ACTUAL, resolutionCycles, minimumCycles);
+  clockPrecisionMeasured = true;
+  String report = "NTP clock precision 2^" + String(static_cast<int>(ntpClockPrecision)) +
+                  " s; minimum read " + String(minimumCycles) + " CPU cycles at " +
+                  String(F_CPU_ACTUAL) + " Hz";
+  Serial.println(report);
+  addLog(report);
+  if (ntpClockPrecision > NTP_TARGET_PRECISION)
+    recordError("NTP clock read exceeds the 2^-20 target; reporting measured precision");
+  const bool previousSuppression = suppressDetailedGnssConfigQueries;
+  suppressDetailedGnssConfigQueries = true;
+  getDeviceConfig();
+  suppressDetailedGnssConfigQueries = previousSuppression;
 }
 
 // Configures and verifies the RTC crystal oscillator for fractional-second operation.
@@ -2636,35 +2727,26 @@ bool configureRtcXtOscillator() {
          (rtc.readRegister(RV1805_OSC_STATUS) & RTC_OSCILLATOR_MODE_RC_MASK) == 0;
 }
 
-// Captures each TP1 rising edge and its interval for later timebase processing.
-void timePulseInterrupt() {
-  const uint32_t edgeMicros = micros();
-  const uint32_t previousEdgeMicros = timePulseEdgeMicros;
-  const uint32_t newPulseCount = timePulseCount + 1;
-
-  timePulseEdgeMicros = edgeMicros;
-  if (timePulseCount > 0) {
-    timePulseIntervalMicros = edgeMicros - previousEdgeMicros;
-    if (timePulseIntervalMicros < PpsClock::MIN_PULSE_INTERVAL_MICROS ||
-        timePulseIntervalMicros > PpsClock::MAX_PULSE_INTERVAL_MICROS)
-      ++timePulseInvalidIntervalCount;
-  }
-  timePulseCount = newPulseCount;
-}
-
-// Copies the volatile TP1 capture state while interrupts are temporarily disabled.
+// Keeps coarse pulse ages for GNSS/RTC scheduling alongside hardware timer ticks.
+// The capture driver preserves the caller's interrupt mask during its snapshot.
 void getTimePulseStatus(uint32_t* pulseCount,
                         uint32_t* intervalMicros,
                         uint32_t* edgeMicros,
-                        uint32_t* invalidIntervalCount) {
-  noInterrupts();
-  *pulseCount = timePulseCount;
-  *intervalMicros = timePulseIntervalMicros;
+                        uint32_t* invalidIntervalCount,
+                        uint32_t* edgeTicks,
+                        uint32_t* intervalTicks) {
+  PpsCapture::Snapshot capture = {};
+  const bool healthy = PpsCapture::snapshot(&capture) && capture.timerHealthy;
+  *pulseCount = capture.pulseCount;
+  *intervalMicros = healthy ? capture.intervalMicros : 0;
   if (edgeMicros != nullptr)
-    *edgeMicros = timePulseEdgeMicros;
+    *edgeMicros = capture.edgeMicros;
   if (invalidIntervalCount != nullptr)
-    *invalidIntervalCount = timePulseInvalidIntervalCount;
-  interrupts();
+    *invalidIntervalCount = capture.invalidPulseCount + (healthy ? 0U : 1U);
+  if (edgeTicks != nullptr)
+    *edgeTicks = capture.edgeTicks;
+  if (intervalTicks != nullptr)
+    *intervalTicks = healthy ? capture.intervalTicks : 0;
 }
 
 // Reports selected TP1 pulse intervals to the serial console for diagnostics.
@@ -2734,12 +2816,38 @@ void reportRtcSyncErrorOnce(const String& error) {
   }
 }
 
+// Enables and verifies running, writable, 24-hour RTC counters before a timestamp update.
+bool prepareRtcForWrite() {
+  uint8_t control = 0;
+  if (!readRtcRegisters(RV1805_CTRL1, &control, 1))
+    return false;
+
+  // Counter writes can be acknowledged while ignored when WRTC is clear.
+  // Preserve output and interrupt settings; the following burst replaces the
+  // calendar, so a previous 12-hour value need not be converted here.
+  constexpr uint8_t modeMask = RTC_CONTROL_STOP_MASK | RTC_CONTROL_12_HOUR_MASK |
+                                RTC_CONTROL_WRITE_ENABLE_MASK;
+  const uint8_t desired = static_cast<uint8_t>(
+      (control & static_cast<uint8_t>(~modeMask)) | RTC_CONTROL_WRITE_ENABLE_MASK);
+  if (control != desired && !rtc.writeRegister(RV1805_CTRL1, desired))
+    return false;
+
+  uint8_t confirmed = 0;
+  return readRtcRegisters(RV1805_CTRL1, &confirmed, 1) &&
+         (confirmed & modeMask) == RTC_CONTROL_WRITE_ENABLE_MASK;
+}
+
 // Writes UTC from a captured TP1 edge with write-delay compensation.
 bool writeRtcAtCapturedPulse(const uint32_t capturedEdgeMicros,
                              const NormalizedTimestamp& utcAtEdge,
                              TimeData* writtenTime) {
   if (writtenTime == nullptr)
     return false;
+
+  if (!prepareRtcForWrite()) {
+    recordRtcTimestampError("RTC counter setup failed: could not verify running, writable 24-hour mode");
+    return false;
+  }
 
   const uint32_t elapsedMicros = micros() - capturedEdgeMicros;
   if (elapsedMicros > RTC_CAPTURE_MAX_AGE_MICROS)
@@ -2807,7 +2915,8 @@ void serviceRtcSync() {
   uint32_t pulseCount = 0;
   uint32_t intervalMicros = 0;
   uint32_t edgeMicros = 0;
-  getTimePulseStatus(&pulseCount, &intervalMicros, &edgeMicros);
+  uint32_t edgeTicks = 0;
+  getTimePulseStatus(&pulseCount, &intervalMicros, &edgeMicros, nullptr, &edgeTicks);
 
   if (pulseCount == rtcReferencePulseCount)
     return;
@@ -2822,10 +2931,10 @@ void serviceRtcSync() {
 
   updatePpsClockFromPulse();
   uint32_t anchorPulseCount = 0;
-  uint32_t anchorEdgeMicros = 0;
+  uint32_t anchorEdgeTicks = 0;
   NormalizedTimestamp utcAtEdge = {};
-  if (!ppsClock.getAnchor(&anchorPulseCount, &anchorEdgeMicros, &utcAtEdge) ||
-      anchorPulseCount != pulseCount || anchorEdgeMicros != edgeMicros) {
+  if (!ppsClock.getAnchor(&anchorPulseCount, &anchorEdgeTicks, &utcAtEdge) ||
+      anchorPulseCount != pulseCount || anchorEdgeTicks != edgeTicks) {
     reportRtcSyncErrorOnce("RTC synchronization waiting for a labelled TP1 edge");
     return;
   }
@@ -2897,7 +3006,7 @@ String getRtcISO8601Time() {
                          2);
 }
 
-// Returns web-formatted RTC time with a note when fractional time is unavailable.
+// Returns RTC time or an explicit availability status for the web interface.
 String getRtcWebISO8601Time() {
   uint8_t oscillatorStatus = 0;
   const bool oscillatorStatusRead =
@@ -2911,7 +3020,10 @@ String getRtcWebISO8601Time() {
   }
 
   String rtcTime = getRtcISO8601Time();
-  if (rtcTime.length() == 0 || rtcHundredthsAvailable)
+  if (rtcTime.length() == 0)
+    return rtcAvailable ? String("Waiting for RTC synchronization")
+                        : String("RTC unavailable; retrying connection");
+  if (rtcHundredthsAvailable)
     return rtcTime;  // NOLINT(clang-diagnostic-nrvo)
 
   if (rtcTime.length() >= 3)
@@ -2967,7 +3079,8 @@ bool discardCurrentUdpPacket() {
 }
 
 // Validates an NTP request, creates its response, and transmits it to the client.
-void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros) {
+void processNtpRequest(const int packetSize, const uint32_t receiveCaptureTicks,
+                       const bool captureValid) {
   const IPAddress remoteIp = udp.remoteIP();
   const uint16_t remotePort = udp.remotePort();
 
@@ -2996,7 +3109,8 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
   NormalizedTimestamp referenceTime = {};
   NormalizedTimestamp receiveTime = {};
   const char* deferredNtpClockError = nullptr;
-  bool timeAvailable = getPpsTimestamp(receiveCaptureMicros, &receiveTime);
+  bool timeAvailable = captureValid && clockPrecisionMeasured &&
+                       getPpsTimestamp(receiveCaptureTicks, &receiveTime);
   if (timeAvailable) {
     uint32_t referencePulseCount = 0;
     uint32_t referenceEdgeMicros = 0;
@@ -3023,7 +3137,8 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
                                                              receiveTime,
                                                              timeAvailable,
                                                              response,
-                                                             sizeof(response));
+                                                             sizeof(response),
+                                                             ntpClockPrecision);
   if (responseStatus != NtpResponseStatus::Ready) {
     if (deferredNtpClockError != nullptr)
       recordError(deferredNtpClockError);
@@ -3042,9 +3157,8 @@ void processNtpRequest(const int packetSize, const uint32_t receiveCaptureMicros
   if (timeAvailable) {
     // Capture T3 after beginPacket's setup work but before the one and only UDP
     // payload write, keeping it close to the actual W5500 transmission.
-    const uint32_t transmitCaptureMicros = micros();
     NormalizedTimestamp transmitTime = {};
-    if (getPpsTimestamp(transmitCaptureMicros, &transmitTime)) {
+    if (readPpsTimestamp(&transmitTime)) {
       writeNtpTimestamp(response + TRANSMIT_TIMESTAMP_OFFSET, toNtpTimestamp(transmitTime));
     }
     else {
@@ -3101,7 +3215,7 @@ static_assert(sizeof(ENTRY_TIMESTAMP_PLACEHOLDER) - 1 == 22,
 // Formats the current PPS-derived UTC time with the requested decimal precision.
 String getPpsISO8601Time(const uint8_t decimalPrecision) {
   NormalizedTimestamp timestamp = {};
-  if (!getPpsTimestamp(micros(), &timestamp) ||
+  if (!readPpsTimestamp(&timestamp) ||
       timestamp.secondsSince1900 < 0)
     return "";
 
